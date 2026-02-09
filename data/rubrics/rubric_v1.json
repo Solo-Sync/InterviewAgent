@@ -1,0 +1,12 @@
+{
+  "rubric_id": "rubric_v1",
+  "title": "Metacognitive Rubric v1",
+  "description": "0-3 rubric for planning, monitoring, evaluation and adaptability.",
+  "scale": {
+    "0": "缺失该维度行为",
+    "1": "有初步意识但不稳定",
+    "2": "行为较稳定并可解释",
+    "3": "高质量且可迁移"
+  },
+  "dimensions": ["plan", "monitor", "evaluate", "adapt"]
+}
