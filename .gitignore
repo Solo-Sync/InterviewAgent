@@ -1,45 +1,49 @@
-# Python bytecode and caches
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Build / packaging
-build/
-dist/
+*.so
+*.egg
 *.egg-info/
+dist/
+build/
+eggs/
 .eggs/
 
-# Virtual environments
-.venv/
-venv/
-env/
+# 模型文件 (太大不上传)
+*.pt
+*.pth
+*.bin
+*.onnx
+*.safetensors
+SenseVoiceSmall/
+fsmn-vad/
+ct-punc/
 
-# Tool caches
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.coverage
-coverage.xml
-htmlcov/
+# 测试音频
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
 
-# UV
-uv.lock
+# 输出文件
+*_result.json
+analysis_*.json
 
-# Environment and local config
-.env
-.env.*
-!.env.example
-
-# IDE / editor
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# OS files
+# 环境
+.env
+.venv/
+venv/
+ENV/
+
+# 系统文件
 .DS_Store
 Thumbs.db
-
-# Runtime logs and temp
-*.log
-tmp/

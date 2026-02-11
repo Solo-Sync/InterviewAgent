@@ -1,13 +1,17 @@
-# metacog-interview
+# ASR 语音分析模块
 
-基于 `docs/` 设计文档生成的 FastAPI + uv 项目骨架。
+基于 FunASR (SenseVoice) 的语音分析系统，提供语音识别、特征提取和认知负荷分析功能。
 
-## 快速开始
+## 功能特性
+
+- 🎤 **语音识别 (ASR)** - 基于 SenseVoice 模型
+- 🔇 **VAD 语音活动检测** - 基于 FSMN-VAD 模型
+- ⏸️ **停顿检测** - 识别短/中/长停顿
+- 💬 **填充词提取** - 识别犹豫词、思考词等
+- 🧠 **认知负荷分析** - 实时评估学习者认知状态
+- 🪜 **脚手架触发建议** - 基于认知负荷的干预建议
+
+## 安装
 
 ```bash
-uv sync
-uv run uvicorn apps.api.main:app --reload
-```
-
-服务默认地址：`http://127.0.0.1:8000`，API 前缀：`/api/v1`。
-
+pip install -r requirements.txt
