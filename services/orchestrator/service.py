@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from libs.schemas.api import CursorEnvelope, SessionCreateRequest, TurnCreateRequest
 from libs.schemas.base import (
+    AsrResult,
     DimScores,
     NextAction,
     NextActionType,
@@ -16,7 +17,10 @@ from libs.schemas.base import (
     Session,
     SessionState,
     Turn,
+    TurnInputType,
 )
+from libs.storage.files import FileStore
+from services.asr import ASRService
 from services.evaluation.aggregator import ScoreAggregator
 from services.nlp.preprocess import Preprocessor
 from services.orchestrator.policy import OrchestratorPolicy
@@ -50,6 +54,8 @@ class OrchestratorService:
         self.trigger_detector = TriggerDetector()
         self.scaffold = ScaffoldGenerator()
         self.scoring = ScoreAggregator()
+        self.asr_service = ASRService()
+        self.file_store = FileStore()
 
     def create_session(self, req: SessionCreateRequest) -> tuple[Session, NextAction]:
         session = Session(
@@ -88,7 +94,7 @@ class OrchestratorService:
             raise RuntimeError("session already ended")
 
         before = session.state
-        raw_text = req.input.text or ""
+        raw_text, asr_result = self._resolve_text_and_asr(req)
         preprocess = PreprocessResult(**self.preprocessor.run(raw_text))
         safety = self.safety.check(preprocess.clean_text)
 
@@ -102,6 +108,7 @@ class OrchestratorService:
                 req=req,
                 state_before=before,
                 state_after=after,
+                asr=asr_result,
                 preprocess=preprocess,
                 triggers=None,
                 evaluation=eval_result,
@@ -133,6 +140,7 @@ class OrchestratorService:
             req=req,
             state_before=before,
             state_after=after,
+            asr=asr_result,
             preprocess=preprocess,
             triggers=triggers or None,
             evaluation=eval_result,
@@ -201,6 +209,7 @@ class OrchestratorService:
         req: TurnCreateRequest,
         state_before: SessionState,
         state_after: SessionState,
+        asr: AsrResult | None,
         preprocess: PreprocessResult,
         triggers,
         evaluation,
@@ -212,6 +221,7 @@ class OrchestratorService:
             turn_id=turn_id,
             turn_index=turn_index,
             input=req.input,
+            asr=asr,
             preprocess=preprocess,
             triggers=triggers,
             scaffold=scaffold,
@@ -236,3 +246,62 @@ class OrchestratorService:
             return payload.offset
         except Exception as exc:  # noqa: BLE001
             raise CursorError("invalid cursor") from exc
+
+    def _resolve_text_and_asr(self, req: TurnCreateRequest) -> tuple[str, AsrResult | None]:
+        if req.input.type == TurnInputType.TEXT:
+            return req.input.text or "", None
+
+        audio_bytes, filename = self._resolve_audio_bytes(req)
+        asr = self.asr_service.transcribe(
+            audio_bytes=audio_bytes,
+            filename=filename,
+            language="zh",
+            need_word_timestamps=True,
+        )
+        return asr.raw_text, asr
+
+    def _resolve_audio_bytes(self, req: TurnCreateRequest) -> tuple[bytes, str]:
+        # Prefer explicit audio_id if provided.
+        if req.input.audio_id:
+            path = self.file_store.path_for(req.input.audio_id)
+            if not path.exists() or not path.is_file():
+                raise ValueError("audio_id not found")
+            return path.read_bytes(), path.name
+
+        if not req.input.audio_url:
+            raise ValueError("audio_ref requires audio_url or audio_id")
+
+        url = req.input.audio_url
+        if url.startswith("data:"):
+            return self._decode_data_url(url)
+
+        if url.startswith("http://") or url.startswith("https://"):
+            import httpx
+
+            with httpx.Client(timeout=20.0) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                return resp.content, url.rsplit("/", 1)[-1] or "audio.bin"
+
+        raise ValueError("unsupported audio_url scheme")
+
+    def _decode_data_url(self, data_url: str) -> tuple[bytes, str]:
+        try:
+            header, payload = data_url.split(",", 1)
+        except ValueError as exc:
+            raise ValueError("invalid data url") from exc
+
+        if ";base64" not in header:
+            raise ValueError("data url must be base64 encoded")
+
+        mime = header[5:].split(";")[0] if header.startswith("data:") else "application/octet-stream"
+        ext = "wav"
+        if "/" in mime:
+            ext = mime.split("/", 1)[1] or ext
+
+        try:
+            data = base64.b64decode(payload, validate=True)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("invalid base64 audio payload") from exc
+
+        return data, f"upload.{ext}"

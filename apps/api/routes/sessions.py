@@ -3,6 +3,7 @@ from fastapi.responses import PlainTextResponse
 
 from apps.api.dependencies import get_orchestrator
 from apps.api.response import err_response, ok
+from libs.schemas.base import ErrorCode
 from libs.schemas.api import SessionCreateRequest, SessionEndRequest, TurnCreateRequest
 from services.orchestrator.service import CursorError, OrchestratorService
 
@@ -51,6 +52,13 @@ def create_turn(
         raise HTTPException(status_code=404, detail="session not found") from None
     except RuntimeError:
         raise HTTPException(status_code=409, detail="session already ended") from None
+    except ValueError as exc:
+        return err_response(
+            request,
+            status_code=400,
+            code=ErrorCode.INVALID_ARGUMENT.value,
+            message=str(exc),
+        )
 
     return ok(
         request,

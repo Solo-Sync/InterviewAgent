@@ -26,6 +26,10 @@
 15. [14_repo_structure.md](14_repo_structure.md) — 后端仓库结构与三人分工
 16. [15_policies.md](15_policies.md) — scoring/scaffold 策略配置
 
+## 统一规范（新增）
+
+- [13_model_and_package_conventions.md](13_model_and_package_conventions.md) — 模型与包结构统一约定（单一契约来源、adapter 映射、ASR 落位）
+
 ## 附录
 
 - `diagrams/`：Mermaid 图（状态机、时序、数据流）

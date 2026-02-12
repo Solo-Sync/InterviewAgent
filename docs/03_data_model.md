@@ -147,3 +147,11 @@ Turn 是一次完整处理的快照：
 - 用 **内容哈希** 做去重（同音频重复上传）
 - 音频默认短期保留（见 13_privacy_and_compliance.md）
 
+---
+
+## 3.5 模型分层与单一来源（新增约定）
+
+- `libs/schemas/*.py` 是 API 契约模型唯一来源（与 `openapi.yaml` 对齐）。
+- `services/*` 可以有内部领域模型，但必须通过 adapter 显式映射到契约模型。
+- 禁止在不同目录并行维护“同名不同义”模型（例如重复定义 `AsrResult`/`Turn`）。
+- 评审标准：对外接口字段变更必须先更新 `openapi.yaml` 与 `libs/schemas`，再改 service 实现。

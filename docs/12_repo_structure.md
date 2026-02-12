@@ -54,3 +54,9 @@ metacog-interview/
 - `ScoringEngine.score(req) -> EvaluationResult`
 - `Aggregator.aggregate(votes) -> (DimScores, confidence)`
 - `EventWriter.append(event)`
+
+## 14.3 ASR 模块落位与边界（统一约定）
+- ASR 能力放在 `services/asr/`，不要在仓库根目录新增独立包。
+- `apps/api/routes/asr.py` 只负责 HTTP/错误码/响应封装，不承载业务逻辑。
+- `services/asr/` 可定义内部领域模型，但对外返回必须映射到 `libs/schemas/base.py` 的 `AsrResult`。
+- 若替换底层引擎（FunASR/Whisper），只改 `services/asr`，不改 API 契约层。
