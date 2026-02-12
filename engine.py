@@ -1,271 +1,250 @@
-"""FunASR 语音识别引擎"""
-import re
-from pathlib import Path
-from typing import Dict, List
+"""
+asr/engine.py - FunASR 语音识别引擎
+"""
 
-from .config import MODEL_DIR, DEVICE
+import logging
+from pathlib import Path
+from typing import Union, Optional
+from dataclasses import dataclass
+from enum import Enum
+
+from .config import ASRConfig
+from .models import TranscriptionResult, WordInfo
+
+logger = logging.getLogger(__name__)
+
+
+class ASRErrorCode(Enum):
+    """ASR 错误码"""
+    MODEL_NOT_LOADED = "MODEL_NOT_LOADED"
+    INFERENCE_FAILED = "INFERENCE_FAILED"
+    INVALID_INPUT = "INVALID_INPUT"
+    FILE_NOT_FOUND = "FILE_NOT_FOUND"
+
+
+class ASRError(Exception):
+    """ASR 异常基类"""
+    def __init__(self, code: ASRErrorCode, message: str, cause: Optional[Exception] = None):
+        self.code = code
+        self.message = message
+        self.cause = cause
+        super().__init__(f"[{code.value}] {message}")
 
 
 class FunASREngine:
-    """FunASR 语音识别引擎 (SenseVoice + VAD + 标点)"""
+    """
+    基于 FunASR 的语音识别引擎
+    集成 SenseVoice + VAD + Punctuation
+    """
     
-    def __init__(self, model_dir: str = MODEL_DIR, device: str = DEVICE):
-        self.model_dir = Path(model_dir)
-        self.device = device
-        self.model = None
-        self.vad_model = None
-        self.punc_model = None
-        self._load_models()
+    def __init__(self, config: Optional[ASRConfig] = None):
+        self.config = config or ASRConfig()
+        self._model = None
+        self._model_loaded = False
+        self._load_error: Optional[Exception] = None
     
-    def _load_models(self):
-        """加载FunASR模型"""
+    def load_model(self) -> None:
+        """
+        加载 ASR 模型
+        
+        Raises:
+            ASRError: 模型加载失败时抛出
+        """
+        if self._model_loaded:
+            return
+            
         try:
             from funasr import AutoModel
             
-            print("正在加载 FunASR 模型...")
+            logger.info(f"Loading ASR model: {self.config.model_name}")
             
-            # 加载 SenseVoice 语音识别模型
-            asr_model_path = self.model_dir / "SenseVoiceSmall"
-            print(f"  ASR模型: {asr_model_path}")
-            
-            self.model = AutoModel(
-                model=str(asr_model_path),
-                trust_remote_code=True,
-                disable_update=True,
-                device=self.device
+            self._model = AutoModel(
+                model=self.config.model_name,
+                vad_model=self.config.vad_model if self.config.enable_vad else None,
+                punc_model=self.config.punc_model if self.config.enable_punc else None,
+                device=self.config.device,
             )
             
-            # 加载 VAD 模型
-            vad_model_path = self.model_dir / "fsmn-vad"
-            print(f"  VAD模型: {vad_model_path}")
+            self._model_loaded = True
+            self._load_error = None
+            logger.info("ASR model loaded successfully")
             
-            self.vad_model = AutoModel(
-                model=str(vad_model_path),
-                trust_remote_code=True,
-                disable_update=True,
-                device=self.device
+        except ImportError as e:
+            self._load_error = e
+            logger.error(f"FunASR not installed: {e}")
+            raise ASRError(
+                ASRErrorCode.MODEL_NOT_LOADED,
+                "FunASR library not installed. Run: pip install funasr",
+                cause=e
             )
-            
-            # 加载标点模型
-            punc_model_path = self.model_dir / "ct-punc"
-            print(f"  标点模型: {punc_model_path}")
-            
-            self.punc_model = AutoModel(
-                model=str(punc_model_path),
-                trust_remote_code=True,
-                disable_update=True,
-                device=self.device
-            )
-            
-            print("✓ 所有模型加载成功！\n")
-            
-        except ImportError:
-            print("请先安装 funasr: pip install funasr")
-            print("将使用模拟模式...")
-            self.model = None
         except Exception as e:
-            print(f"模型加载失败: {e}")
-            print("将使用模拟模式...")
-            self.model = None
+            self._load_error = e
+            logger.error(f"Failed to load ASR model: {e}")
+            raise ASRError(
+                ASRErrorCode.MODEL_NOT_LOADED,
+                f"Failed to load model '{self.config.model_name}': {str(e)}",
+                cause=e
+            )
     
-    def transcribe(self, audio_path: str) -> Dict:
+    @property
+    def is_ready(self) -> bool:
+        """检查模型是否就绪"""
+        return self._model_loaded and self._model is not None
+    
+    def transcribe(
+        self,
+        audio_input: Union[str, Path, bytes],
+        language: Optional[str] = None
+    ) -> TranscriptionResult:
         """
-        转录音频文件
-        返回: 包含文本、时间戳、VAD信息的字典
+        执行语音识别
+        
+        Args:
+            audio_input: 音频文件路径或音频数据
+            language: 语言代码 (如 "zh", "en")，None 表示自动检测
+            
+        Returns:
+            TranscriptionResult: 识别结果
+            
+        Raises:
+            ASRError: 模型未加载、输入无效或推理失败时抛出
         """
-        if self.model is None:
-            return self._mock_transcribe(audio_path)
+        # 检查模型状态
+        if not self.is_ready:
+            raise ASRError(
+                ASRErrorCode.MODEL_NOT_LOADED,
+                "ASR model not loaded. Call load_model() first.",
+                cause=self._load_error
+            )
         
-        result = {
-            'text': '',
-            'word_timestamps': [],
-            'vad_segments': [],
-            'sentences': []
-        }
+        # 验证输入
+        audio_path = self._validate_input(audio_input)
         
+        # 执行推理
         try:
-            # Step 1: VAD 检测语音段
-            print("  执行VAD检测...")
-            vad_result = self.vad_model.generate(
-                input=audio_path,
-                batch_size_s=300
+            result = self._model.generate(
+                input=str(audio_path) if audio_path else audio_input,
+                language=language or self.config.language,
+                use_itn=True,
+                batch_size_s=self.config.batch_size_s,
             )
             
-            if vad_result and len(vad_result) > 0:
-                vad_segments = vad_result[0].get('value', [])
-                result['vad_segments'] = [
-                    {'start': seg[0] / 1000, 'end': seg[1] / 1000}
-                    for seg in vad_segments
-                ]
-                print(f"    检测到 {len(result['vad_segments'])} 个语音段")
-            
-            # Step 2: ASR 语音识别
-            print("  执行语音识别...")
-            asr_result = self.model.generate(
-                input=audio_path,
-                batch_size_s=300,
-                return_raw_text=False
-            )
-            
-            if asr_result and len(asr_result) > 0:
-                asr_output = asr_result[0]
-                
-                if isinstance(asr_output, dict):
-                    result['text'] = asr_output.get('text', '')
-                    
-                    if 'timestamp' in asr_output:
-                        timestamps = asr_output['timestamp']
-                        result['word_timestamps'] = self._parse_sensevoice_output(
-                            result['text'], 
-                            timestamps
-                        )
-                    else:
-                        result['word_timestamps'] = self._estimate_timestamps(
-                            result['text'],
-                            result['vad_segments']
-                        )
-                else:
-                    result['text'] = str(asr_output)
-            
-            # Step 3: 标点恢复
-            if result['text'] and self.punc_model:
-                print("  恢复标点...")
-                punc_result = self.punc_model.generate(
-                    input=result['text']
-                )
-                if punc_result and len(punc_result) > 0:
-                    result['text'] = punc_result[0].get('text', result['text'])
-            
-            # 清理特殊标记
-            result['text'] = re.sub(r'<\|[^|]+\|>', '', result['text']).strip()
-            
-            print(f"  识别完成: {result['text'][:50]}...")
+            return self._parse_result(result)
             
         except Exception as e:
-            print(f"转录出错: {e}")
-            import traceback
-            traceback.print_exc()
-            return self._mock_transcribe(audio_path)
-        
-        return result
+            logger.error(f"ASR inference failed: {e}")
+            raise ASRError(
+                ASRErrorCode.INFERENCE_FAILED,
+                f"Speech recognition failed: {str(e)}",
+                cause=e
+            )
     
-    def _parse_sensevoice_output(self, text: str, timestamps: List) -> List[Dict]:
-        """解析SenseVoice输出的时间戳"""
-        word_timestamps = []
-        chars = list(text.replace(' ', ''))
+    def _validate_input(self, audio_input: Union[str, Path, bytes]) -> Optional[Path]:
+        """
+        验证输入参数
         
-        for i, (char, ts) in enumerate(zip(chars, timestamps)):
-            if isinstance(ts, (list, tuple)) and len(ts) >= 2:
-                word_timestamps.append({
-                    'word': char,
-                    'start': ts[0] / 1000 if ts[0] > 100 else ts[0],
-                    'end': ts[1] / 1000 if ts[1] > 100 else ts[1],
-                    'confidence': 0.95
-                })
+        Returns:
+            Path if file input, None if bytes input
+            
+        Raises:
+            ASRError: 输入无效时抛出
+        """
+        if isinstance(audio_input, bytes):
+            if len(audio_input) == 0:
+                raise ASRError(
+                    ASRErrorCode.INVALID_INPUT,
+                    "Empty audio data provided"
+                )
+            return None
+            
+        audio_path = Path(audio_input)
+        if not audio_path.exists():
+            raise ASRError(
+                ASRErrorCode.FILE_NOT_FOUND,
+                f"Audio file not found: {audio_path}"
+            )
         
-        return word_timestamps
+        if audio_path.stat().st_size == 0:
+            raise ASRError(
+                ASRErrorCode.INVALID_INPUT,
+                f"Audio file is empty: {audio_path}"
+            )
+            
+        return audio_path
     
-    def _estimate_timestamps(self, text: str, vad_segments: List[Dict]) -> List[Dict]:
-        """基于VAD和文本估算时间戳"""
-        if not vad_segments or not text:
-            return []
+    def _parse_result(self, raw_result: list) -> TranscriptionResult:
+        """解析 FunASR 输出"""
+        if not raw_result:
+            return TranscriptionResult(
+                text="",
+                words=[],
+                language="unknown",
+                duration=0.0
+            )
         
-        word_timestamps = []
-        chars = [c for c in text if c.strip()]
+        item = raw_result[0]
+        text = item.get("text", "")
         
-        total_speech_duration = sum(
-            seg['end'] - seg['start'] for seg in vad_segments
+        words = []
+        if "timestamp" in item and "words" in item:
+            timestamps = item["timestamp"]
+            word_list = item["words"] if isinstance(item.get("words"), list) else text.split()
+            
+            for i, (word, ts) in enumerate(zip(word_list, timestamps)):
+                if isinstance(ts, (list, tuple)) and len(ts) >= 2:
+                    words.append(WordInfo(
+                        word=word,
+                        start_time=ts[0] / 1000.0,
+                        end_time=ts[1] / 1000.0,
+                        confidence=item.get("confidence", 0.9)
+                    ))
+        
+        duration = 0.0
+        if words:
+            duration = words[-1].end_time
+        
+        return TranscriptionResult(
+            text=text,
+            words=words,
+            language=item.get("language", self.config.language or "zh"),
+            duration=duration,
+            raw_result=item
         )
-        
-        if not chars:
-            return []
-        
-        char_duration = total_speech_duration / len(chars)
-        current_time = vad_segments[0]['start'] if vad_segments else 0
-        seg_idx = 0
-        
-        for char in chars:
-            if seg_idx < len(vad_segments):
-                if current_time >= vad_segments[seg_idx]['end']:
-                    seg_idx += 1
-                    if seg_idx < len(vad_segments):
-                        current_time = vad_segments[seg_idx]['start']
-            
-            word_timestamps.append({
-                'word': char,
-                'start': current_time,
-                'end': current_time + char_duration,
-                'confidence': 0.8
-            })
-            
-            current_time += char_duration
-        
-        return word_timestamps
     
-    def _mock_transcribe(self, audio_path: str) -> Dict:
-        """模拟转录（用于测试）"""
-        print("  [模拟模式] 生成测试数据...")
+    def transcribe_safe(
+        self,
+        audio_input: Union[str, Path, bytes],
+        language: Optional[str] = None
+    ) -> tuple[Optional[TranscriptionResult], Optional[ASRError]]:
+        """
+        安全版本的 transcribe，返回 (result, error) 元组
+        不抛异常，适合需要自行处理错误的场景
         
-        mock_text = "嗯，我觉得这个问题，呃，应该从两个方面来考虑。首先是，嗯，基本概念的理解，然后是实际应用。"
-        
-        mock_timestamps = [
-            {"word": "嗯", "start": 0.0, "end": 0.3, "confidence": 0.95},
-            {"word": "，", "start": 0.3, "end": 0.35, "confidence": 1.0},
-            {"word": "我", "start": 0.8, "end": 0.95, "confidence": 0.98},
-            {"word": "觉", "start": 0.95, "end": 1.05, "confidence": 0.97},
-            {"word": "得", "start": 1.05, "end": 1.15, "confidence": 0.97},
-            {"word": "这", "start": 1.15, "end": 1.25, "confidence": 0.96},
-            {"word": "个", "start": 1.25, "end": 1.35, "confidence": 0.96},
-            {"word": "问", "start": 1.35, "end": 1.5, "confidence": 0.98},
-            {"word": "题", "start": 1.5, "end": 1.65, "confidence": 0.98},
-            {"word": "，", "start": 1.65, "end": 1.7, "confidence": 1.0},
-            {"word": "呃", "start": 2.2, "end": 2.5, "confidence": 0.92},
-            {"word": "，", "start": 2.5, "end": 2.55, "confidence": 1.0},
-            {"word": "应", "start": 2.9, "end": 3.0, "confidence": 0.97},
-            {"word": "该", "start": 3.0, "end": 3.15, "confidence": 0.97},
-            {"word": "从", "start": 3.15, "end": 3.3, "confidence": 0.98},
-            {"word": "两", "start": 3.3, "end": 3.45, "confidence": 0.96},
-            {"word": "个", "start": 3.45, "end": 3.55, "confidence": 0.96},
-            {"word": "方", "start": 3.55, "end": 3.7, "confidence": 0.97},
-            {"word": "面", "start": 3.7, "end": 3.85, "confidence": 0.97},
-            {"word": "来", "start": 3.85, "end": 4.0, "confidence": 0.98},
-            {"word": "考", "start": 4.0, "end": 4.15, "confidence": 0.97},
-            {"word": "虑", "start": 4.15, "end": 4.3, "confidence": 0.97},
-            {"word": "。", "start": 4.3, "end": 4.35, "confidence": 1.0},
-            {"word": "首", "start": 4.8, "end": 4.95, "confidence": 0.98},
-            {"word": "先", "start": 4.95, "end": 5.1, "confidence": 0.98},
-            {"word": "是", "start": 5.1, "end": 5.25, "confidence": 0.99},
-            {"word": "，", "start": 5.25, "end": 5.3, "confidence": 1.0},
-            {"word": "嗯", "start": 5.7, "end": 6.0, "confidence": 0.93},
-            {"word": "，", "start": 6.0, "end": 6.05, "confidence": 1.0},
-            {"word": "基", "start": 6.3, "end": 6.45, "confidence": 0.97},
-            {"word": "本", "start": 6.45, "end": 6.6, "confidence": 0.97},
-            {"word": "概", "start": 6.6, "end": 6.75, "confidence": 0.98},
-            {"word": "念", "start": 6.75, "end": 6.9, "confidence": 0.98},
-            {"word": "的", "start": 6.9, "end": 7.0, "confidence": 0.99},
-            {"word": "理", "start": 7.0, "end": 7.15, "confidence": 0.97},
-            {"word": "解", "start": 7.15, "end": 7.3, "confidence": 0.97},
-            {"word": "，", "start": 7.3, "end": 7.35, "confidence": 1.0},
-            {"word": "然", "start": 7.7, "end": 7.85, "confidence": 0.98},
-            {"word": "后", "start": 7.85, "end": 8.0, "confidence": 0.98},
-            {"word": "是", "start": 8.0, "end": 8.15, "confidence": 0.99},
-            {"word": "实", "start": 8.15, "end": 8.3, "confidence": 0.97},
-            {"word": "际", "start": 8.3, "end": 8.45, "confidence": 0.97},
-            {"word": "应", "start": 8.45, "end": 8.6, "confidence": 0.98},
-            {"word": "用", "start": 8.6, "end": 8.75, "confidence": 0.98},
-            {"word": "。", "start": 8.75, "end": 8.8, "confidence": 1.0},
-        ]
-        
-        mock_vad = [
-            {'start': 0.0, 'end': 1.7},
-            {'start': 2.2, 'end': 4.35},
-            {'start': 4.8, 'end': 6.05},
-            {'start': 6.3, 'end': 8.8}
-        ]
-        
+        Returns:
+            (TranscriptionResult, None) 成功时
+            (None, ASRError) 失败时
+        """
+        try:
+            result = self.transcribe(audio_input, language)
+            return result, None
+        except ASRError as e:
+            return None, e
+        except Exception as e:
+            error = ASRError(
+                ASRErrorCode.INFERENCE_FAILED,
+                f"Unexpected error: {str(e)}",
+                cause=e
+            )
+            return None, error
+    
+    def health_check(self) -> dict:
+        """
+        健康检查，返回引擎状态
+        """
         return {
-            'text': mock_text,
-            'word_timestamps': mock_timestamps,
-            'vad_segments': mock_vad,
-            'sentences': []
+            "ready": self.is_ready,
+            "model_loaded": self._model_loaded,
+            "model_name": self.config.model_name,
+            "device": self.config.device,
+            "last_error": str(self._load_error) if self._load_error else None
         }

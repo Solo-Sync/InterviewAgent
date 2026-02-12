@@ -1,34 +1,53 @@
-"""ASR 语音分析模块"""
+"""
+asr - 语音识别与分析模块
+"""
+
+from .config import ASRConfig
 from .models import (
-    WordSegment, 
-    PauseEvent, 
-    FillerEvent,
-    SemanticStream, 
-    FeatureStream,
-    CognitiveLoadSignal, 
-    AnalysisResult
+    WordInfo,
+    TranscriptionResult,
+    AcousticFeatures,
+    FluencyMetrics,
+    CognitiveMetrics,
+    SpeechAnalysisResult,
 )
-from .engine import FunASREngine
+from .engine import FunASREngine, ASRError, ASRErrorCode
 from .features import AcousticFeatureExtractor
 from .cognitive import CognitiveLoadAnalyzer
 from .analyzer import SpeechAnalyzer
-from .adapter import ApiAdapter
+from .adapter import (
+    ApiAdapter,
+    SpeechAnalysisResponse,
+    ScaffoldTrigger,
+    AnalysisStatus,
+    AnalysisError,
+)
 
 __version__ = "0.1.0"
 
 __all__ = [
-    # 主类
-    "SpeechAnalyzer",
-    "FunASREngine", 
+    # Config
+    "ASRConfig",
+    # Models
+    "WordInfo",
+    "TranscriptionResult",
+    "AcousticFeatures",
+    "FluencyMetrics",
+    "CognitiveMetrics",
+    "SpeechAnalysisResult",
+    # Engine
+    "FunASREngine",
+    "ASRError",
+    "ASRErrorCode",
+    # Extractors
     "AcousticFeatureExtractor",
     "CognitiveLoadAnalyzer",
+    # Analyzer
+    "SpeechAnalyzer",
+    # Adapter
     "ApiAdapter",
-    # 数据结构
-    "WordSegment",
-    "PauseEvent",
-    "FillerEvent",
-    "SemanticStream",
-    "FeatureStream",
-    "CognitiveLoadSignal",
-    "AnalysisResult",
+    "SpeechAnalysisResponse",
+    "ScaffoldTrigger",
+    "AnalysisStatus",
+    "AnalysisError",
 ]

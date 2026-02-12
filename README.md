@@ -15,3 +15,27 @@
 
 ```bash
 pip install -r requirements.txt
+# 基本用法
+python -m asr interview.wav
+
+# 指定输出
+python -m asr interview.wav -o result.json
+
+# API 格式输出
+python -m asr interview.wav --api-format -o api_result.json
+
+# 指定模型目录（Linux/Mac）
+python -m asr interview.wav --model-dir ~/.cache/funasr
+
+# 指定模型目录（Windows）
+python -m asr interview.wav --model-dir C:\Users\xxx\.cache\funasr
+
+# 使用环境变量
+export ASR_MODEL_DIR=/data/models/funasr
+python -m asr interview.wav
+
+# 强制使用 CPU
+python -m asr interview.wav --device cpu
+
+# 详细日志
+python -m asr interview.wav -v

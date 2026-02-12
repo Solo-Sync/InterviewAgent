@@ -2,17 +2,121 @@
 import json
 import re
 import numpy as np
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
-from .config import MODEL_DIR
+from .config import MODEL_DIR, FILLER_WORDS
 from .models import (
     WordSegment, SemanticStream, FeatureStream, 
-    AnalysisResult, CognitiveLoadSignal
+    AnalysisResult, CognitiveLoadSignal, FillerEvent
 )
 from .engine import FunASREngine
 from .features import AcousticFeatureExtractor
 from .cognitive import CognitiveLoadAnalyzer
 from .adapter import ApiAdapter
+
+
+class FillerMatcher:
+    """
+    填充词匹配器
+    使用最长优先 + 非重叠匹配策略
+    """
+    
+    def __init__(self, filler_words: Dict[str, List[str]] = None):
+        self.filler_words = filler_words or FILLER_WORDS
+        # 构建词 -> 类型的映射，按长度降序排列
+        self._build_matcher()
+    
+    def _build_matcher(self):
+        """构建匹配器，按词长降序排列以实现最长优先匹配"""
+        self.word_to_type: Dict[str, str] = {}
+        all_words: List[Tuple[str, str]] = []
+        
+        for filler_type, words in self.filler_words.items():
+            for word in words:
+                all_words.append((word, filler_type))
+                self.word_to_type[word] = filler_type
+        
+        # 按长度降序排列，确保最长优先匹配
+        all_words.sort(key=lambda x: len(x[0]), reverse=True)
+        self.sorted_words = [w[0] for w in all_words]
+        
+        # 构建正则表达式，使用 | 连接，按长度降序
+        # 转义特殊字符
+        escaped_words = [re.escape(w) for w in self.sorted_words]
+        if escaped_words:
+            self.pattern = re.compile('(' + '|'.join(escaped_words) + ')')
+        else:
+            self.pattern = None
+    
+    def find_fillers(self, text: str) -> List[Dict]:
+        """
+        在文本中查找填充词（非重叠匹配）
+        
+        Returns:
+            List[Dict]: 每个元素包含 word, type, start_pos, end_pos
+        """
+        if not self.pattern or not text:
+            return []
+        
+        results = []
+        for match in self.pattern.finditer(text):
+            word = match.group()
+            results.append({
+                'word': word,
+                'type': self.word_to_type[word],
+                'start_pos': match.start(),
+                'end_pos': match.end()
+            })
+        
+        return results
+    
+    def count_fillers(self, text: str) -> Dict[str, int]:
+        """
+        统计各类型填充词数量
+        
+        Returns:
+            Dict[str, int]: {filler_type: count}
+        """
+        fillers = self.find_fillers(text)
+        counts: Dict[str, int] = {}
+        
+        for f in fillers:
+            ftype = f['type']
+            counts[ftype] = counts.get(ftype, 0) + 1
+        
+        return counts
+    
+    def remove_fillers(self, text: str) -> str:
+        """
+        移除文本中的填充词（非重叠）
+        
+        Returns:
+            清理后的文本
+        """
+        if not self.pattern or not text:
+            return text
+        
+        return self.pattern.sub('', text)
+    
+    def get_stats(self, text: str) -> Dict:
+        """
+        获取完整的填充词统计
+        
+        Returns:
+            Dict: 包含 total_count, by_type, positions
+        """
+        fillers = self.find_fillers(text)
+        by_type = {}
+        
+        for f in fillers:
+            ftype = f['type']
+            by_type[ftype] = by_type.get(ftype, 0) + 1
+        
+        return {
+            'total_count': len(fillers),
+            'by_type': by_type,
+            'positions': fillers
+        }
 
 
 class SpeechAnalyzer:
@@ -22,6 +126,7 @@ class SpeechAnalyzer:
         self.asr_engine = FunASREngine(model_dir)
         self.feature_extractor = AcousticFeatureExtractor()
         self.cognitive_analyzer = CognitiveLoadAnalyzer()
+        self.filler_matcher = FillerMatcher()
     
     def analyze(self, audio_path: str) -> AnalysisResult:
         """完整分析流程"""
@@ -67,7 +172,8 @@ class SpeechAnalyzer:
         
         all_pauses = pauses_from_vad if pauses_from_vad else pauses_from_words
         
-        fillers = self.feature_extractor.extract_fillers(word_timestamps)
+        # 使用新的填充词匹配器（基于时间戳）
+        fillers = self._extract_fillers_with_timestamps(word_timestamps)
         speech_rates = self.feature_extractor.calculate_speech_rate(word_timestamps)
         
         try:
@@ -120,6 +226,52 @@ class SpeechAnalyzer:
             scaffold_recommendations=scaffold_recommendations
         )
     
+    def _extract_fillers_with_timestamps(self, word_timestamps: List[Dict]) -> List[FillerEvent]:
+        """
+        从带时间戳的词列表中提取填充词
+        使用最长优先匹配，支持多字填充词
+        """
+        fillers = []
+        n = len(word_timestamps)
+        i = 0
+        
+        while i < n:
+            matched = False
+            
+            # 尝试最长匹配（最多检查4个连续词）
+            for length in range(min(4, n - i), 0, -1):
+                combined_word = ''.join(
+                    word_timestamps[i + j]['word'] 
+                    for j in range(length)
+                )
+                
+                # 检查组合词是否是填充词
+                if combined_word in self.filler_matcher.word_to_type:
+                    filler_type = self.filler_matcher.word_to_type[combined_word]
+                    fillers.append(FillerEvent(
+                        word=combined_word,
+                        start_time=word_timestamps[i]['start'],
+                        end_time=word_timestamps[i + length - 1]['end'],
+                        filler_type=filler_type
+                    ))
+                    i += length
+                    matched = True
+                    break
+            
+            if not matched:
+                # 检查单个词
+                word = word_timestamps[i]['word']
+                if word in self.filler_matcher.word_to_type:
+                    fillers.append(FillerEvent(
+                        word=word,
+                        start_time=word_timestamps[i]['start'],
+                        end_time=word_timestamps[i]['end'],
+                        filler_type=self.filler_matcher.word_to_type[word]
+                    ))
+                i += 1
+        
+        return fillers
+    
     def _segment_sentences(self, word_timestamps: List[Dict]) -> List[Dict]:
         """分割句子"""
         sentences = []
@@ -163,23 +315,26 @@ class SpeechAnalyzer:
         speech_rates = [r['chars_per_minute'] for r in features.speech_rate_timeline]
         load_scores = [s.load_score for s in signals]
         
+        # 使用准确的填充词统计
+        filler_by_type: Dict[str, int] = {}
+        for f in features.fillers:
+            ftype = f.filler_type
+            filler_by_type[ftype] = filler_by_type.get(ftype, 0) + 1
+        
         return {
             'total_duration': total_duration,
             'char_count': len(semantic.segments),
             'sentence_count': len(semantic.sentences),
             'pause_count': len(features.pauses),
             'pause_total_duration': sum(pause_durations) if pause_durations else 0,
-            'pause_mean_duration': np.mean(pause_durations) if pause_durations else 0,
+            'pause_mean_duration': float(np.mean(pause_durations)) if pause_durations else 0,
             'long_pause_count': len([p for p in features.pauses if p.pause_type == 'long']),
             'filler_count': len(features.fillers),
-            'filler_by_type': {
-                ft: len([f for f in features.fillers if f.filler_type == ft])
-                for ft in ['hesitation', 'thinking', 'confirmation', 'uncertainty']
-            },
-            'speech_rate_mean': np.mean(speech_rates) if speech_rates else 0,
-            'speech_rate_std': np.std(speech_rates) if speech_rates else 0,
-            'cognitive_load_mean': np.mean(load_scores) if load_scores else 0,
-            'cognitive_load_max': max(load_scores) if load_scores else 0,
+            'filler_by_type': filler_by_type,
+            'speech_rate_mean': float(np.mean(speech_rates)) if speech_rates else 0,
+            'speech_rate_std': float(np.std(speech_rates)) if speech_rates else 0,
+            'cognitive_load_mean': float(np.mean(load_scores)) if load_scores else 0,
+            'cognitive_load_max': float(max(load_scores)) if load_scores else 0,
             'high_load_ratio': len([s for s in signals if s.load_level == 'high']) / len(signals) if signals else 0,
             'scaffold_trigger_count': len([s for s in signals if s.trigger_scaffold])
         }
@@ -364,10 +519,7 @@ class SpeechAnalyzer:
             'preprocess': {
                 'clean_text': ApiAdapter.clean_text(result.semantic_stream.full_text),
                 'filler_stats': result.summary_metrics.get('filler_by_type', {}),
-                'hesitation_rate': (
-                    result.summary_metrics.get('filler_by_type', {}).get('hesitation', 0) /
-                    max(result.summary_metrics.get('filler_count', 1), 1)
-                )
+                'hesitation_rate': self._calculate_hesitation_rate(result)
             },
             'triggers': ApiAdapter.to_triggers(
                 result.cognitive_signals,
@@ -382,6 +534,16 @@ class SpeechAnalyzer:
         
         print(f"✓ 已导出 API 格式: {output_path}")
     
+    def _calculate_hesitation_rate(self, result: AnalysisResult) -> float:
+        """计算犹豫率（犹豫类填充词 / 总填充词）"""
+        filler_by_type = result.summary_metrics.get('filler_by_type', {})
+        total = result.summary_metrics.get('filler_count', 0)
+        hesitation_count = filler_by_type.get('hesitation', 0)
+        
+        if total == 0:
+            return 0.0
+        return hesitation_count / total
+    
     # API 兼容方法
     def transcribe_for_api(self, audio_path: str) -> Dict:
         """API 兼容的转录方法"""
@@ -389,28 +551,48 @@ class SpeechAnalyzer:
         return ApiAdapter.to_asr_result(raw_result)
     
     def preprocess_for_api(self, text: str) -> Dict:
-        """API 兼容的预处理方法"""
-        from .config import FILLER_WORDS
-        from .models import FillerEvent
+        """API 兼容的预处理方法（修复重叠匹配问题）"""
+        # 使用 FillerMatcher 进行非重叠匹配
+        filler_stats = self.filler_matcher.get_stats(text)
+        clean_text = self.filler_matcher.remove_fillers(text)
+        clean_text = ApiAdapter.clean_text(clean_text)
         
-        clean_text = ApiAdapter.clean_text(text)
-        
-        # 移除填充词
-        for filler_list in FILLER_WORDS.values():
-            for fw in filler_list:
-                clean_text = clean_text.replace(fw, '')
-        
-        # 提取填充词
-        fillers = []
-        for filler_type, filler_list in FILLER_WORDS.items():
-            for fw in filler_list:
-                count = text.count(fw)
-                for _ in range(count):
-                    fillers.append(FillerEvent(
-                        word=fw,
-                        start_time=0,
-                        end_time=0,
-                        filler_type=filler_type
-                    ))
+        # 构建 FillerEvent 列表
+        fillers = [
+            FillerEvent(
+                word=f['word'],
+                start_time=0,  # 纯文本模式下没有时间戳
+                end_time=0,
+                filler_type=f['type']
+            )
+            for f in filler_stats['positions']
+        ]
         
         return ApiAdapter.to_preprocess_result(clean_text, fillers)
+    
+    def analyze_text_fillers(self, text: str) -> Dict:
+        """
+        分析纯文本中的填充词（无时间戳）
+        
+        Returns:
+            Dict: {
+                'clean_text': str,
+                'filler_count': int,
+                'filler_by_type': Dict[str, int],
+                'filler_positions': List[Dict],
+                'hesitation_rate': float
+            }
+        """
+        stats = self.filler_matcher.get_stats(text)
+        clean_text = self.filler_matcher.remove_fillers(text)
+        
+        hesitation_count = stats['by_type'].get('hesitation', 0)
+        hesitation_rate = hesitation_count / stats['total_count'] if stats['total_count'] > 0 else 0.0
+        
+        return {
+            'clean_text': clean_text,
+            'filler_count': stats['total_count'],
+            'filler_by_type': stats['by_type'],
+            'filler_positions': stats['positions'],
+            'hesitation_rate': hesitation_rate
+        }
