@@ -1,0 +1,1380 @@
+openapi: 3.0.3
+info:
+  title: Metacognitive Interview API
+  version: 0.1.0
+  description: |
+    MVP + 扩展版接口契约（FastAPI/OpenAPI 3.0）。
+servers:
+  - url: /api/v1
+
+tags:
+  - name: system
+  - name: sessions
+  - name: asr
+  - name: nlp
+  - name: scaffold
+  - name: evaluation
+  - name: safety
+  - name: admin
+  - name: annotation
+
+security:
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      security: []
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseHealth"
+
+  /sessions:
+    post:
+      tags: [sessions]
+      summary: Create a new interview session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionCreateRequest"
+      responses:
+        "200":
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseSessionCreate"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /sessions/{session_id}:
+    get:
+      tags: [sessions]
+      summary: Get current session state (for resume)
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Session detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseSessionGet"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /sessions/{session_id}/turns:
+    post:
+      tags: [sessions]
+      summary: Submit one turn (text MVP; audio can be added later)
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TurnCreateRequest"
+      responses:
+        "200":
+          description: Turn processed; returns triggers/scaffold/evaluation/next_action
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseTurnCreate"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+    get:
+      tags: [sessions]
+      summary: List turns (pagination)
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Turn list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseTurnList"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /sessions/{session_id}/end:
+    post:
+      tags: [sessions]
+      summary: End session and generate report
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionEndRequest"
+      responses:
+        "200":
+          description: Report generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseSessionEnd"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /sessions/{session_id}/report:
+    get:
+      tags: [sessions]
+      summary: Get final report
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseReportGet"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /sessions/{session_id}/events/export:
+    get:
+      tags: [sessions]
+      summary: Export event stream (JSONL)
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: JSONL export (one event per line)
+          content:
+            text/plain:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /asr/transcribe:
+    post:
+      tags: [asr]
+      summary: Transcribe an audio file (offline)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [audio_file]
+              properties:
+                audio_file:
+                  type: string
+                  format: binary
+                language:
+                  type: string
+                  description: zh/en
+                  default: zh
+                need_word_timestamps:
+                  type: boolean
+                  default: true
+      responses:
+        "200":
+          description: ASR result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseAsrTranscribe"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+
+  /nlp/preprocess:
+    post:
+      tags: [nlp]
+      summary: Preprocess text (filler extraction + clean semantic text)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreprocessRequest"
+      responses:
+        "200":
+          description: Preprocess result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponsePreprocess"
+
+  /scaffold/generate:
+    post:
+      tags: [scaffold]
+      summary: Generate scaffold prompt (L1-L3)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScaffoldGenerateRequest"
+      responses:
+        "200":
+          description: Scaffold prompt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseScaffoldGenerate"
+
+  /evaluation/score:
+    post:
+      tags: [evaluation]
+      summary: Stateless scoring for one answer (for debugging/offline tuning)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EvaluationScoreRequest"
+      responses:
+        "200":
+          description: Evaluation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEvaluationScore"
+        "502":
+          $ref: "#/components/responses/LlmUpstreamError"
+
+  /evaluation/batch_score:
+    post:
+      tags: [evaluation]
+      summary: Batch scoring for dataset regression
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EvaluationBatchRequest"
+      responses:
+        "200":
+          description: Batch evaluation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseEvaluationBatch"
+        "502":
+          $ref: "#/components/responses/LlmUpstreamError"
+
+  /safety/check:
+    post:
+      tags: [safety]
+      summary: Prompt injection / safety check
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SafetyCheckRequest"
+      responses:
+        "200":
+          description: Safety decision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseSafetyCheck"
+
+  /sessions/{session_id}/annotations:
+    post:
+      tags: [annotation]
+      summary: Submit human annotation for one turn (calibration)
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HumanAnnotationCreateRequest"
+      responses:
+        "200":
+          description: Annotation stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseAnnotationCreate"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /admin/question_sets:
+    get:
+      tags: [admin]
+      summary: List question sets (read-only MVP)
+      responses:
+        "200":
+          description: List question sets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseQuestionSetList"
+
+  /admin/question_sets/{question_set_id}:
+    get:
+      tags: [admin]
+      summary: Get question set detail (tree + probes + perturbations)
+      parameters:
+        - name: question_set_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Question set detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseQuestionSetGet"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /admin/rubrics:
+    get:
+      tags: [admin]
+      summary: List rubrics (read-only MVP)
+      responses:
+        "200":
+          description: List rubrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseRubricList"
+
+  /admin/rubrics/{rubric_id}:
+    get:
+      tags: [admin]
+      summary: Get rubric detail
+      parameters:
+        - name: rubric_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Rubric detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseRubricGet"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+        nullable: true
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiResponseError"
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiResponseError"
+    Conflict:
+      description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiResponseError"
+    PayloadTooLarge:
+      description: Payload too large
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiResponseError"
+    LlmUpstreamError:
+      description: LLM upstream error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiResponseError"
+
+  schemas:
+    # ========== Common ==========
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: INVALID_ARGUMENT
+        message:
+          type: string
+        detail:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    ApiResponseError:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+          example: false
+        data:
+          nullable: true
+        error:
+          $ref: "#/components/schemas/ApiError"
+        trace_id:
+          type: string
+
+    ApiResponseHealth:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required: [service, version, llm_ready, asr_ready]
+          properties:
+            service:
+              type: string
+              example: metacog-interview
+            version:
+              type: string
+              example: 0.1.0
+            llm_ready:
+              type: boolean
+            asr_ready:
+              type: boolean
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    Candidate:
+      type: object
+      required: [candidate_id]
+      properties:
+        candidate_id:
+          type: string
+        display_name:
+          type: string
+          nullable: true
+
+    Thresholds:
+      type: object
+      properties:
+        silence_s:
+          type: number
+          default: 15
+        offtrack_threshold:
+          type: number
+          default: 0.7
+        loop_threshold:
+          type: number
+          default: 0.8
+
+    SessionState:
+      type: string
+      enum: [S_INIT, S_WAIT, S_PROBE, S_SCAFFOLD, S_EVAL_RT, S_END]
+
+    Session:
+      type: object
+      required: [session_id, state, mode, question_set_id, scoring_policy_id, scaffold_policy_id, created_at]
+      properties:
+        session_id:
+          type: string
+        candidate:
+          $ref: "#/components/schemas/Candidate"
+        mode:
+          type: string
+          enum: [text, audio]
+        state:
+          $ref: "#/components/schemas/SessionState"
+        question_set_id:
+          type: string
+        scoring_policy_id:
+          type: string
+        scaffold_policy_id:
+          type: string
+        thresholds:
+          $ref: "#/components/schemas/Thresholds"
+        created_at:
+          type: string
+          format: date-time
+
+    NextActionType:
+      type: string
+      enum: [ASK, PROBE, SCAFFOLD, CALM, END, WAIT]
+
+    ScaffoldLevel:
+      type: string
+      enum: [L1, L2, L3]
+
+    NextAction:
+      type: object
+      required: [type]
+      properties:
+        type:
+          $ref: "#/components/schemas/NextActionType"
+        text:
+          type: string
+          nullable: true
+        level:
+          $ref: "#/components/schemas/ScaffoldLevel"
+          nullable: true
+        payload:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    TriggerType:
+      type: string
+      enum: [SILENCE, OFFTRACK, LOOP, HELP_KEYWORD, STRESS_SIGNAL]
+
+    Trigger:
+      type: object
+      required: [type, score]
+      properties:
+        type:
+          $ref: "#/components/schemas/TriggerType"
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+        detail:
+          type: string
+          nullable: true
+
+    # ========== Turn Input ==========
+    TurnInputType:
+      type: string
+      enum: [text, audio_ref]
+
+    TurnInput:
+      type: object
+      required: [type]
+      properties:
+        type:
+          $ref: "#/components/schemas/TurnInputType"
+        text:
+          type: string
+          nullable: true
+        audio_url:
+          type: string
+          nullable: true
+        audio_id:
+          type: string
+          nullable: true
+
+    ClientMeta:
+      type: object
+      properties:
+        client_timestamp:
+          type: string
+          format: date-time
+          nullable: true
+        client_platform:
+          type: string
+          nullable: true
+
+    # ========== Preprocess/ASR Features ==========
+    AudioFeatures:
+      type: object
+      additionalProperties: true
+
+    PreprocessResult:
+      type: object
+      required: [clean_text]
+      properties:
+        clean_text:
+          type: string
+        filler_stats:
+          type: object
+          additionalProperties:
+            type: integer
+          nullable: true
+        hesitation_rate:
+          type: number
+          nullable: true
+
+    AsrToken:
+      type: object
+      required: [token, start_ms, end_ms]
+      properties:
+        token:
+          type: string
+        start_ms:
+          type: integer
+        end_ms:
+          type: integer
+
+    AsrResult:
+      type: object
+      required: [raw_text]
+      properties:
+        raw_text:
+          type: string
+        tokens:
+          type: array
+          items:
+            $ref: "#/components/schemas/AsrToken"
+          nullable: true
+        silence_segments:
+          type: array
+          items:
+            $ref: "#/components/schemas/SilenceSegment"
+          nullable: true
+        audio_features:
+          $ref: "#/components/schemas/AudioFeatures"
+          nullable: true
+
+    SilenceSegment:
+      type: object
+      required: [start_ms, end_ms]
+      properties:
+        start_ms:
+          type: integer
+        end_ms:
+          type: integer
+
+    # ========== Evaluation ==========
+    DimScores:
+      type: object
+      required: [plan, monitor, evaluate, adapt]
+      properties:
+        plan:
+          type: number
+        monitor:
+          type: number
+        evaluate:
+          type: number
+        adapt:
+          type: number
+
+    EvidenceSpan:
+      type: object
+      required: [dimension, quote, reason]
+      properties:
+        dimension:
+          type: string
+          enum: [plan, monitor, evaluate, adapt]
+        quote:
+          type: string
+        start:
+          type: integer
+          nullable: true
+        end:
+          type: integer
+          nullable: true
+        reason:
+          type: string
+
+    JudgeVote:
+      type: object
+      required: [judge_id, scores, confidence]
+      properties:
+        judge_id:
+          type: string
+        scores:
+          $ref: "#/components/schemas/DimScores"
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    Discount:
+      type: object
+      required: [reason, dimension, multiplier]
+      properties:
+        reason:
+          type: string
+        dimension:
+          type: string
+          enum: [plan, monitor, evaluate, adapt]
+        multiplier:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    EvaluationResult:
+      type: object
+      required: [scores]
+      properties:
+        scores:
+          $ref: "#/components/schemas/DimScores"
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvidenceSpan"
+          nullable: true
+        judge_votes:
+          type: array
+          items:
+            $ref: "#/components/schemas/JudgeVote"
+          nullable: true
+        final_confidence:
+          type: number
+          nullable: true
+        discounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Discount"
+          nullable: true
+
+    # ========== Scaffold ==========
+    ScaffoldResult:
+      type: object
+      required: [fired]
+      properties:
+        fired:
+          type: boolean
+        level:
+          $ref: "#/components/schemas/ScaffoldLevel"
+          nullable: true
+        prompt:
+          type: string
+          nullable: true
+        rationale:
+          type: string
+          nullable: true
+
+    # ========== Turn ==========
+    QuestionRef:
+      type: object
+      properties:
+        qid:
+          type: string
+          nullable: true
+        text:
+          type: string
+
+    Turn:
+      type: object
+      required: [turn_id, turn_index, state_before, state_after, created_at]
+      properties:
+        turn_id:
+          type: string
+        turn_index:
+          type: integer
+        state_before:
+          $ref: "#/components/schemas/SessionState"
+        state_after:
+          $ref: "#/components/schemas/SessionState"
+        question:
+          $ref: "#/components/schemas/QuestionRef"
+          nullable: true
+        input:
+          $ref: "#/components/schemas/TurnInput"
+        asr:
+          $ref: "#/components/schemas/AsrResult"
+          nullable: true
+        preprocess:
+          $ref: "#/components/schemas/PreprocessResult"
+          nullable: true
+        triggers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Trigger"
+          nullable: true
+        scaffold:
+          $ref: "#/components/schemas/ScaffoldResult"
+          nullable: true
+        evaluation:
+          $ref: "#/components/schemas/EvaluationResult"
+          nullable: true
+        next_action:
+          $ref: "#/components/schemas/NextAction"
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    # ========== Reports ==========
+    Report:
+      type: object
+      required: [overall, timeline]
+      properties:
+        overall:
+          $ref: "#/components/schemas/DimScores"
+        timeline:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReportPoint"
+        notes:
+          type: array
+          items:
+            type: string
+          nullable: true
+
+    ReportPoint:
+      type: object
+      required: [turn_index, scores]
+      properties:
+        turn_index:
+          type: integer
+        scores:
+          $ref: "#/components/schemas/DimScores"
+
+    # ========== Requests ==========
+    SessionCreateRequest:
+      type: object
+      required: [candidate, mode, question_set_id, scoring_policy_id, scaffold_policy_id]
+      properties:
+        candidate:
+          $ref: "#/components/schemas/Candidate"
+        mode:
+          type: string
+          enum: [text, audio]
+        question_set_id:
+          type: string
+        scoring_policy_id:
+          type: string
+        scaffold_policy_id:
+          type: string
+        thresholds:
+          $ref: "#/components/schemas/Thresholds"
+
+    TurnCreateRequest:
+      type: object
+      required: [input]
+      properties:
+        input:
+          $ref: "#/components/schemas/TurnInput"
+        client_meta:
+          $ref: "#/components/schemas/ClientMeta"
+          nullable: true
+
+    SessionEndRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          enum: [completed, aborted, timeout]
+
+    PreprocessRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+
+    ScaffoldGenerateRequest:
+      type: object
+      required: [level, task, candidate_last_answer, error_type, state]
+      properties:
+        level:
+          $ref: "#/components/schemas/ScaffoldLevel"
+        task:
+          type: object
+          required: [question]
+          properties:
+            question:
+              type: string
+            qid:
+              type: string
+              nullable: true
+        candidate_last_answer:
+          type: string
+        error_type:
+          type: string
+          enum: [STUCK, OFFTRACK, LOOP, FACT_ERROR, HIGH_STRESS]
+        state:
+          $ref: "#/components/schemas/SessionState"
+
+    EvaluationScoreRequest:
+      type: object
+      required: [rubric_id, question, answer_clean_text]
+      properties:
+        rubric_id:
+          type: string
+        question:
+          type: string
+        answer_clean_text:
+          type: string
+        features:
+          type: object
+          additionalProperties: true
+          nullable: true
+        scaffold_used:
+          type: object
+          properties:
+            used:
+              type: boolean
+            level:
+              $ref: "#/components/schemas/ScaffoldLevel"
+              nullable: true
+          nullable: true
+
+    EvaluationBatchRequest:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvaluationScoreRequest"
+
+    SafetyCheckRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+
+    HumanAnnotationCreateRequest:
+      type: object
+      required: [turn_id, human_scores]
+      properties:
+        turn_id:
+          type: string
+        human_scores:
+          $ref: "#/components/schemas/DimScores"
+        notes:
+          type: string
+          nullable: true
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvidenceSpan"
+          nullable: true
+
+    # ========== Admin objects (read-only MVP) ==========
+    QuestionSetSummary:
+      type: object
+      required: [question_set_id, title]
+      properties:
+        question_set_id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+
+    QuestionSetDetail:
+      type: object
+      required: [question_set_id, title, questions]
+      properties:
+        question_set_id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        questions:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    RubricSummary:
+      type: object
+      required: [rubric_id, title]
+      properties:
+        rubric_id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+
+    RubricDetail:
+      type: object
+      required: [rubric_id, title, scale]
+      properties:
+        rubric_id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        scale:
+          type: object
+          additionalProperties: true
+
+    # ========== API Responses (typed) ==========
+    ApiResponseSessionCreate:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required: [session, next_action]
+          properties:
+            session:
+              $ref: "#/components/schemas/Session"
+            next_action:
+              $ref: "#/components/schemas/NextAction"
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseSessionGet:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [session]
+          properties:
+            session:
+              $ref: "#/components/schemas/Session"
+            last_next_action:
+              $ref: "#/components/schemas/NextAction"
+              nullable: true
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseTurnCreate:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [turn, next_action]
+          properties:
+            turn:
+              $ref: "#/components/schemas/Turn"
+            next_action:
+              $ref: "#/components/schemas/NextAction"
+            triggers:
+              type: array
+              items:
+                $ref: "#/components/schemas/Trigger"
+              nullable: true
+            scaffold:
+              $ref: "#/components/schemas/ScaffoldResult"
+              nullable: true
+            evaluation:
+              $ref: "#/components/schemas/EvaluationResult"
+              nullable: true
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseTurnList:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [items, next_cursor]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/Turn"
+            next_cursor:
+              type: string
+              nullable: true
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseSessionEnd:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [report]
+          properties:
+            report:
+              $ref: "#/components/schemas/Report"
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseReportGet:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [report]
+          properties:
+            report:
+              $ref: "#/components/schemas/Report"
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseAsrTranscribe:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [asr]
+          properties:
+            asr:
+              $ref: "#/components/schemas/AsrResult"
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponsePreprocess:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [preprocess]
+          properties:
+            preprocess:
+              $ref: "#/components/schemas/PreprocessResult"
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseScaffoldGenerate:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [scaffold]
+          properties:
+            scaffold:
+              $ref: "#/components/schemas/ScaffoldResult"
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseEvaluationScore:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [evaluation]
+          properties:
+            evaluation:
+              $ref: "#/components/schemas/EvaluationResult"
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseEvaluationBatch:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/EvaluationResult"
+            stats:
+              type: object
+              additionalProperties: true
+              nullable: true
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseSafetyCheck:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [is_safe, category, action]
+          properties:
+            is_safe:
+              type: boolean
+            category:
+              type: string
+              enum: [OK, PROMPT_INJECTION, SENSITIVE, OTHER]
+            action:
+              type: string
+              enum: [ALLOW, BLOCK, SANITIZE, REPHRASE]
+            sanitized_text:
+              type: string
+              nullable: true
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseAnnotationCreate:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [stored]
+          properties:
+            stored:
+              type: boolean
+              example: true
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseQuestionSetList:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/QuestionSetSummary"
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseQuestionSetGet:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [question_set]
+          properties:
+            question_set:
+              $ref: "#/components/schemas/QuestionSetDetail"
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseRubricList:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/RubricSummary"
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    ApiResponseRubricGet:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+        data:
+          type: object
+          required: [rubric]
+          properties:
+            rubric:
+              $ref: "#/components/schemas/RubricDetail"
+        error:
+          nullable: true
+        trace_id:
+          type: string

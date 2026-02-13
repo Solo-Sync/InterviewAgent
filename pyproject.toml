@@ -1,0 +1,28 @@
+[project]
+name = "metacognitive-interview"
+version = "0.1.0"
+description = "元认知面试系统 - 基于LangGraph的状态机实现"
+requires-python = ">=3.10"
+dependencies = [
+    "langgraph>=0.2.0",
+    "langchain>=0.3.0",
+    "langchain-core>=0.3.0",
+    "dashscope>=1.17.0",  # 千问LLM SDK
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "typing-extensions>=4.8.0",
+    "openai>=2.17.0",
+    "langchain-openai>=1.1.8",
+    "langchain-community>=0.4.1",
+    "dotenv>=0.9.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.hatch.build]
+include = ["src/**/*"]
