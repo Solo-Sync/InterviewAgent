@@ -1,0 +1,42 @@
+# scoring_engine/report_generator.py
+
+import json
+from typing import List, Dict, Any, Optional
+
+class ReportGenerator:
+    """报告生成器：将评分结果整理成标准JSON格式"""
+
+    @staticmethod
+    def generate_report(
+        aggregated_score: float,
+        confidence: float,
+        deductions: List[Dict[str, Any]],
+        evidences: List[Dict[str, Any]],
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        生成标准JSON格式的报告
+
+        Args:
+            aggregated_score: 聚合后的分数
+            confidence: 置信度
+            deductions: 扣分项列表，每个扣分项应包含 reason, points 等字段
+            evidences: 证据引用列表，每个证据应包含 source, text, location 等字段
+            metadata: 额外的元数据，如时间戳、版本等
+
+        Returns:
+            JSON格式的字符串
+        """
+        report = {
+            "score": aggregated_score,
+            "confidence": confidence,
+            "deductions": deductions,
+            "evidences": evidences,
+        }
+        if metadata:
+            report["metadata"] = metadata
+
+        # 可添加固定版本信息
+        report["version"] = "1.0"
+
+        return json.dumps(report, ensure_ascii=False, indent=2)
