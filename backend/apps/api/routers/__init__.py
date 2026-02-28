@@ -1,9 +1,10 @@
-from apps.api.routers import admin, annotation, asr, evaluation, health, nlp, safety, scaffold, sessions
+from apps.api.routers import admin, annotation, asr, auth, evaluation, health, nlp, safety, scaffold, sessions
 
 __all__ = [
     "admin",
     "annotation",
     "asr",
+    "auth",
     "evaluation",
     "health",
     "nlp",

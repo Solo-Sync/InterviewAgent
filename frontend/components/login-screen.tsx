@@ -1,19 +1,30 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { BrainCircuit, ShieldCheck, User, ArrowRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import type { UserRole } from "@/lib/types"
+import { signIn } from "@/lib/auth-client"
+import type { AuthSession } from "@/lib/types"
 
 interface LoginScreenProps {
-  onLogin: (role: UserRole) => void
+  onLogin: (session: AuthSession) => void
 }
 
 export function LoginScreen({ onLogin }: LoginScreenProps) {
   const [selectedRole, setSelectedRole] = useState<"admin" | "candidate">("candidate")
+  const [email, setEmail] = useState("sarah.chen@email.com")
+  const [password, setPassword] = useState("password123")
+  const [errorText, setErrorText] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  useEffect(() => {
+    setEmail(selectedRole === "admin" ? "admin@company.com" : "sarah.chen@email.com")
+    setPassword("password123")
+    setErrorText(null)
+  }, [selectedRole])
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
@@ -58,9 +69,18 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault()
-                onLogin(selectedRole)
+                setIsSubmitting(true)
+                setErrorText(null)
+                try {
+                  const session = await signIn(selectedRole, email, password)
+                  onLogin(session)
+                } catch (error) {
+                  setErrorText(error instanceof Error ? error.message : "Login failed")
+                } finally {
+                  setIsSubmitting(false)
+                }
               }}
               className="flex flex-col gap-4"
             >
@@ -70,15 +90,32 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                   id="email"
                   type="email"
                   placeholder={selectedRole === "admin" ? "admin@company.com" : "candidate@email.com"}
-                  defaultValue={selectedRole === "admin" ? "admin@company.com" : "sarah.chen@email.com"}
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
                   className="bg-card"
                 />
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="password" className="text-foreground">Password</Label>
-                <Input id="password" type="password" placeholder="Enter your password" defaultValue="password123" className="bg-card" />
+                <Input
+                  id="password"
+                  type="password"
+                  placeholder="Enter your password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  className="bg-card"
+                />
               </div>
-              <Button type="submit" className="mt-2 w-full bg-primary text-primary-foreground hover:bg-primary/90">
+              {errorText ? (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  {errorText}
+                </div>
+              ) : null}
+              <Button
+                type="submit"
+                disabled={isSubmitting}
+                className="mt-2 w-full bg-primary text-primary-foreground hover:bg-primary/90"
+              >
                 {selectedRole === "admin" ? "Sign in as Admin" : "Start Interview"}
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>

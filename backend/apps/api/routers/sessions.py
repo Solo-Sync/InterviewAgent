@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
+from apps.api.core.auth import AuthPrincipal, AuthRole, require_roles
 from apps.api.core.dependencies import get_orchestrator
 from apps.api.core.response import err_response, ok
 from libs.schemas.base import ErrorCode
@@ -20,13 +21,38 @@ from services.orchestrator.service import CursorError, OrchestratorService
 router = APIRouter(tags=["sessions"])
 
 
+def _require_owned_session(
+    session_id: str,
+    *,
+    orchestrator: OrchestratorService,
+    principal: AuthPrincipal,
+):
+    session = orchestrator.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    if session.candidate is None or session.candidate.candidate_id != principal.candidate_id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return session
+
+
 @router.post("/sessions", response_model=ApiResponseSessionCreate)
 def create_session(
     request: Request,
     body: SessionCreateRequest,
     orchestrator: OrchestratorService = Depends(get_orchestrator),
+    principal: AuthPrincipal = Depends(require_roles(AuthRole.CANDIDATE)),
 ):
-    session, next_action = orchestrator.create_session(body)
+    if body.candidate.candidate_id != principal.candidate_id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    try:
+        session, next_action = orchestrator.create_session(body)
+    except ValueError as exc:
+        return err_response(
+            request,
+            status_code=400,
+            code=ErrorCode.INVALID_ARGUMENT.value,
+            message=str(exc),
+        )
     return ok(request, {"session": session.model_dump(), "next_action": next_action.model_dump()})
 
 
@@ -35,10 +61,9 @@ def get_session(
     request: Request,
     session_id: str,
     orchestrator: OrchestratorService = Depends(get_orchestrator),
+    principal: AuthPrincipal = Depends(require_roles(AuthRole.CANDIDATE)),
 ):
-    session = orchestrator.get_session(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="session not found")
+    session = _require_owned_session(session_id, orchestrator=orchestrator, principal=principal)
     last_action = orchestrator.get_last_next_action(session_id)
     return ok(
         request,
@@ -55,7 +80,9 @@ def create_turn(
     session_id: str,
     body: TurnCreateRequest,
     orchestrator: OrchestratorService = Depends(get_orchestrator),
+    principal: AuthPrincipal = Depends(require_roles(AuthRole.CANDIDATE)),
 ):
+    _require_owned_session(session_id, orchestrator=orchestrator, principal=principal)
     try:
         turn, next_action = orchestrator.handle_turn(session_id, body)
     except KeyError:
@@ -89,10 +116,9 @@ def list_turns(
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = None,
     orchestrator: OrchestratorService = Depends(get_orchestrator),
+    principal: AuthPrincipal = Depends(require_roles(AuthRole.CANDIDATE)),
 ):
-    session = orchestrator.get_session(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="session not found")
+    _require_owned_session(session_id, orchestrator=orchestrator, principal=principal)
     try:
         items, next_cursor = orchestrator.list_turns(session_id, limit, cursor)
     except CursorError:
@@ -119,9 +145,9 @@ def end_session(
     session_id: str,
     body: SessionEndRequest,
     orchestrator: OrchestratorService = Depends(get_orchestrator),
+    principal: AuthPrincipal = Depends(require_roles(AuthRole.CANDIDATE)),
 ):
-    if orchestrator.get_session(session_id) is None:
-        raise HTTPException(status_code=404, detail="session not found")
+    _require_owned_session(session_id, orchestrator=orchestrator, principal=principal)
     report = orchestrator.end_session(session_id, body.reason.value)
     return ok(request, {"report": report.model_dump()})
 
@@ -131,7 +157,9 @@ def get_report(
     request: Request,
     session_id: str,
     orchestrator: OrchestratorService = Depends(get_orchestrator),
+    principal: AuthPrincipal = Depends(require_roles(AuthRole.CANDIDATE)),
 ):
+    _require_owned_session(session_id, orchestrator=orchestrator, principal=principal)
     report = orchestrator.get_report(session_id)
     if report is None:
         raise HTTPException(status_code=404, detail="report not found")
@@ -142,7 +170,7 @@ def get_report(
 def export_events(
     session_id: str,
     orchestrator: OrchestratorService = Depends(get_orchestrator),
+    principal: AuthPrincipal = Depends(require_roles(AuthRole.CANDIDATE)),
 ):
-    if orchestrator.get_session(session_id) is None:
-        raise HTTPException(status_code=404, detail="session not found")
+    _require_owned_session(session_id, orchestrator=orchestrator, principal=principal)
     return orchestrator.export_events(session_id)

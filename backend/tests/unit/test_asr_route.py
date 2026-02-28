@@ -1,11 +1,12 @@
 from fastapi.testclient import TestClient
 
+from apps.api.core.auth import AuthRole, issue_access_token
 from apps.api.main import app
 from apps.api.routers import asr as asr_route
 from libs.schemas.base import AsrResult
 from services.asr import ASRErrorCode, ASRServiceError
 
-AUTH_HEADERS = {"Authorization": "Bearer test-token"}
+AUTH_HEADERS = {"Authorization": f"Bearer {issue_access_token(subject='admin@company.com', role=AuthRole.ADMIN)[0]}"}
 
 
 def test_asr_transcribe_returns_contract_shape(monkeypatch) -> None:
@@ -94,3 +95,13 @@ def test_asr_transcribe_requires_bearer_auth() -> None:
     payload = resp.json()
     assert payload["ok"] is False
     assert payload["error"]["code"] == "UNAUTHORIZED"
+
+
+def test_asr_transcribe_rejects_invalid_bearer_token() -> None:
+    client = TestClient(app)
+    client.headers.update({"Authorization": "Bearer wrong-token"})
+    resp = client.post(
+        "/api/v1/asr/transcribe",
+        files={"audio_file": ("sample.wav", b"fake-audio-bytes", "audio/wav")},
+    )
+    assert resp.status_code == 401

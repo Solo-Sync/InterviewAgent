@@ -2,11 +2,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from apps.api.core.auth import require_bearer_auth
+from apps.api.core.auth import AuthRole, require_roles
 from apps.api.core.config import settings
 from apps.api.core.response import err_payload
 from apps.api.middleware.trace import TraceIDMiddleware
-from apps.api.routers import admin, annotation, asr, evaluation, health, nlp, safety, scaffold, sessions
+from apps.api.routers import admin, annotation, asr, auth, evaluation, health, nlp, safety, scaffold, sessions
 from libs.schemas.base import ErrorCode
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
@@ -35,6 +35,8 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         code = ErrorCode.INVALID_ARGUMENT.value
     elif exc.status_code == 401:
         code = ErrorCode.UNAUTHORIZED.value
+    elif exc.status_code == 403:
+        code = ErrorCode.FORBIDDEN.value
     elif exc.status_code == 409:
         code = ErrorCode.CONFLICT.value
 
@@ -59,43 +61,32 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 app.include_router(health.router, prefix=settings.api_prefix)
-app.include_router(
-    sessions.router,
-    prefix=settings.api_prefix,
-    dependencies=[Depends(require_bearer_auth)],
-)
+app.include_router(auth.router, prefix=settings.api_prefix)
+app.include_router(sessions.router, prefix=settings.api_prefix)
 app.include_router(
     asr.router,
     prefix=settings.api_prefix,
-    dependencies=[Depends(require_bearer_auth)],
+    dependencies=[Depends(require_roles(AuthRole.ADMIN, AuthRole.ANNOTATOR))],
 )
 app.include_router(
     nlp.router,
     prefix=settings.api_prefix,
-    dependencies=[Depends(require_bearer_auth)],
+    dependencies=[Depends(require_roles(AuthRole.ADMIN, AuthRole.ANNOTATOR))],
 )
 app.include_router(
     safety.router,
     prefix=settings.api_prefix,
-    dependencies=[Depends(require_bearer_auth)],
+    dependencies=[Depends(require_roles(AuthRole.ADMIN, AuthRole.ANNOTATOR))],
 )
 app.include_router(
     scaffold.router,
     prefix=settings.api_prefix,
-    dependencies=[Depends(require_bearer_auth)],
+    dependencies=[Depends(require_roles(AuthRole.ADMIN, AuthRole.ANNOTATOR))],
 )
 app.include_router(
     evaluation.router,
     prefix=settings.api_prefix,
-    dependencies=[Depends(require_bearer_auth)],
+    dependencies=[Depends(require_roles(AuthRole.ADMIN, AuthRole.ANNOTATOR))],
 )
-app.include_router(
-    admin.router,
-    prefix=settings.api_prefix,
-    dependencies=[Depends(require_bearer_auth)],
-)
-app.include_router(
-    annotation.router,
-    prefix=settings.api_prefix,
-    dependencies=[Depends(require_bearer_auth)],
-)
+app.include_router(admin.router, prefix=settings.api_prefix)
+app.include_router(annotation.router, prefix=settings.api_prefix)

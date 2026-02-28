@@ -1,8 +1,9 @@
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from apps.api.core.auth import AuthPrincipal, AuthRole, require_roles
 from apps.api.core.response import ok
 from libs.schemas.api import (
     ApiResponseQuestionSetGet,
@@ -23,7 +24,10 @@ def _load_json(path: Path) -> dict:
 
 
 @router.get("/admin/question_sets", response_model=ApiResponseQuestionSetList)
-def list_question_sets(request: Request):
+def list_question_sets(
+    request: Request,
+    _: AuthPrincipal = Depends(require_roles(AuthRole.ADMIN)),
+):
     items = []
     for path in sorted(QUESTION_SET_DIR.glob("*.json")):
         payload = _load_json(path)
@@ -38,7 +42,11 @@ def list_question_sets(request: Request):
 
 
 @router.get("/admin/question_sets/{question_set_id}", response_model=ApiResponseQuestionSetGet)
-def get_question_set(request: Request, question_set_id: str):
+def get_question_set(
+    request: Request,
+    question_set_id: str,
+    _: AuthPrincipal = Depends(require_roles(AuthRole.ADMIN)),
+):
     path = QUESTION_SET_DIR / f"{question_set_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="question_set not found")
@@ -53,7 +61,10 @@ def get_question_set(request: Request, question_set_id: str):
 
 
 @router.get("/admin/rubrics", response_model=ApiResponseRubricList)
-def list_rubrics(request: Request):
+def list_rubrics(
+    request: Request,
+    _: AuthPrincipal = Depends(require_roles(AuthRole.ADMIN)),
+):
     items = []
     for path in sorted(RUBRIC_DIR.glob("*.json")):
         payload = _load_json(path)
@@ -68,7 +79,11 @@ def list_rubrics(request: Request):
 
 
 @router.get("/admin/rubrics/{rubric_id}", response_model=ApiResponseRubricGet)
-def get_rubric(request: Request, rubric_id: str):
+def get_rubric(
+    request: Request,
+    rubric_id: str,
+    _: AuthPrincipal = Depends(require_roles(AuthRole.ADMIN)),
+):
     path = RUBRIC_DIR / f"{rubric_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="rubric not found")

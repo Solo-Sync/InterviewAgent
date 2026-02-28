@@ -43,4 +43,5 @@ Thumbs.db
 # Runtime logs and temp
 *.log
 tmp/
+*.db
 backend/*.db

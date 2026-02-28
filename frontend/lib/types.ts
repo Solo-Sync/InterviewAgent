@@ -1,4 +1,11 @@
-export type UserRole = "admin" | "candidate" | null
+export type UserRole = "admin" | "candidate" | "annotator" | null
+
+export interface AuthSession {
+  role: Exclude<UserRole, null>
+  email: string
+  candidateId: string | null
+  displayName: string | null
+}
 
 export type CandidateStatus = "pending" | "in-progress" | "completed"
 

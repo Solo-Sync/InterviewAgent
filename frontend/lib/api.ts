@@ -67,14 +67,20 @@ export type RubricListPayload = {
   }>
 }
 
+function buildHeaders(init?: RequestInit): Headers {
+  const headers = new Headers(init?.headers)
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json")
+  }
+  return headers
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     cache: "no-store",
+    credentials: "same-origin",
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
+    headers: buildHeaders(init),
   })
 
   const payload = (await response.json().catch(() => null)) as ApiEnvelope<T> | null
@@ -86,17 +92,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return payload.data
 }
 
-export async function createInterviewSession(displayName = "Web Candidate") {
+export async function createInterviewSession(candidateId: string, displayName = "Web Candidate") {
   return request<SessionCreatePayload>("/api/v1/sessions", {
     method: "POST",
     body: JSON.stringify({
       candidate: {
-        candidate_id: `candidate_${Date.now()}`,
+        candidate_id: candidateId,
         display_name: displayName,
       },
       mode: "text",
       question_set_id: "qs_fermi_v1",
-      scoring_policy_id: "scoring_default_v1",
+      scoring_policy_id: "rubric_v1",
       scaffold_policy_id: "scaffold_default_v1",
     }),
   })

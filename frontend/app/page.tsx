@@ -5,16 +5,17 @@ import { LoginScreen } from "@/components/login-screen"
 import { AdminDashboard } from "@/components/admin-dashboard"
 import { AdminReview } from "@/components/admin-review"
 import { CandidateInterview } from "@/components/candidate-interview"
-import type { AppView, UserRole, Candidate } from "@/lib/types"
+import { signOut } from "@/lib/auth-client"
+import type { AppView, AuthSession, Candidate } from "@/lib/types"
 
 export default function Home() {
   const [view, setView] = useState<AppView>("login")
-  const [, setRole] = useState<UserRole>(null)
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null)
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null)
 
-  const handleLogin = (loginRole: UserRole) => {
-    setRole(loginRole)
-    if (loginRole === "admin") {
+  const handleLogin = (session: AuthSession) => {
+    setAuthSession(session)
+    if (session.role === "admin") {
       setView("admin-dashboard")
     } else {
       setView("candidate-interview")
@@ -22,7 +23,8 @@ export default function Home() {
   }
 
   const handleLogout = () => {
-    setRole(null)
+    void signOut()
+    setAuthSession(null)
     setView("login")
     setSelectedCandidate(null)
   }
@@ -52,7 +54,15 @@ export default function Home() {
         <AdminReview candidate={selectedCandidate} onBack={handleBackToDashboard} />
       ) : null
     case "candidate-interview":
-      return <CandidateInterview onLogout={handleLogout} />
+      return authSession?.candidateId ? (
+        <CandidateInterview
+          onLogout={handleLogout}
+          candidateId={authSession.candidateId}
+          displayName={authSession.displayName}
+        />
+      ) : (
+        <LoginScreen onLogin={handleLogin} />
+      )
     default:
       return <LoginScreen onLogin={handleLogin} />
   }

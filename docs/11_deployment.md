@@ -58,7 +58,8 @@
 ---
 
 ## 11.4 安全与权限
-- JWT BearerAuth
+- 签名 access token + 角色声明（`candidate` / `admin` / `annotator`）
+- 浏览器端不要持有后台通用 bearer token；Web 前端通过 Next.js 服务端登录和 `HttpOnly` cookie 转发到后端
 - 角色建议：
   - `candidate_client`：仅 sessions/turns/report
   - `admin`：admin/question_sets, admin/rubrics

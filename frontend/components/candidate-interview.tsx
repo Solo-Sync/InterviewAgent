@@ -17,6 +17,8 @@ import type { ChatMessage, InterviewState } from "@/lib/types"
 
 interface CandidateInterviewProps {
   onLogout: () => void
+  candidateId: string
+  displayName: string | null
 }
 
 const TARGET_TURNS = 6
@@ -35,7 +37,7 @@ function formatScoreLabel(score: { plan: number; monitor: number; evaluate: numb
   return `${Math.round(avg * 100)} / 100`
 }
 
-export function CandidateInterview({ onLogout }: CandidateInterviewProps) {
+export function CandidateInterview({ onLogout, candidateId, displayName }: CandidateInterviewProps) {
   const [showMicCheck, setShowMicCheck] = useState(true)
   const [timeLeft, setTimeLeft] = useState(1800)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -78,7 +80,8 @@ export function CandidateInterview({ onLogout }: CandidateInterviewProps) {
 
     void (async () => {
       try {
-        const payload = await createInterviewSession("Web Candidate")
+        const candidateName = displayName?.trim() || "Web Candidate"
+        const payload = await createInterviewSession(candidateId, candidateName)
         setSessionId(payload.session.session_id)
         setMessages([
           {
@@ -109,7 +112,7 @@ export function CandidateInterview({ onLogout }: CandidateInterviewProps) {
         setInterviewState("idle")
       }
     })()
-  }, [])
+  }, [candidateId, displayName])
 
   const handlePressStart = useCallback(() => {
     if (interviewState !== "idle" || interviewComplete || !sessionId) return
