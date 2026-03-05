@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,6 +13,43 @@ from libs.readiness import ReadinessProbe
 from libs.schemas.base import DimScores, Turn
 
 logger = logging.getLogger(__name__)
+
+_SIGNAL_TERMS = (
+    "目标",
+    "计划",
+    "步骤",
+    "拆分",
+    "假设",
+    "检查",
+    "验证",
+    "对比",
+    "证据",
+    "如果",
+    "调整",
+    "适应",
+    "plan",
+    "monitor",
+    "evaluate",
+    "adapt",
+    "step",
+    "check",
+    "validate",
+    "compare",
+    "fallback",
+)
+_SIGNAL_TERMS_SORTED = sorted(_SIGNAL_TERMS, key=len, reverse=True)
+_REFUSAL_PATTERNS = (
+    "不知道",
+    "不太会",
+    "答不出来",
+    "不想答",
+    "拒绝回答",
+    "跳过",
+    "结束",
+    "抱歉",
+)
+_TOKEN_RE = re.compile(r"[0-9A-Za-z_]{2,}|[\u4e00-\u9fff]+")
+_NON_SEMANTIC_RE = re.compile(r"[\s,.;:!?，。；：！？、*\\-_/]+")
 
 
 @dataclass(slots=True)
@@ -83,6 +121,8 @@ class SessionScorer:
             notes = ["session_score_source:llm", f"session_score_confidence:{confidence:.2f}"]
             if summary:
                 notes.append(f"session_score_summary:{summary[:180]}")
+            scores, guard_notes = self._apply_post_guards(scores, turns)
+            notes.extend(guard_notes)
             return SessionScoreResult(
                 scores=scores,
                 confidence=confidence,
@@ -188,9 +228,65 @@ class SessionScorer:
         notes = [f"session_score_source:fallback_turn_mean", f"session_score_fallback_reason:{reason}"]
         if readiness and readiness.detail:
             notes.append(f"session_score_gateway_detail:{readiness.detail[:180]}")
+        scores, guard_notes = self._apply_post_guards(scores, turns)
+        notes.extend(guard_notes)
         return SessionScoreResult(
             scores=scores,
             confidence=None,
             source="fallback_turn_mean",
             notes=notes,
         )
+
+    def _apply_post_guards(self, scores: DimScores, turns: list[Turn]) -> tuple[DimScores, list[str]]:
+        guarded = scores
+        notes: list[str] = []
+        if self._is_refusal_dominant(turns):
+            guarded = self._cap_all(guarded, 0.2)
+            notes.append("session_score_guard:refusal_dominant_cap")
+        if self._is_keyword_stuffing_dominant(turns):
+            guarded = self._cap_all(guarded, 0.8)
+            notes.append("session_score_guard:keyword_stuffing_cap")
+        return guarded, notes
+
+    def _cap_all(self, scores: DimScores, cap: float) -> DimScores:
+        return DimScores(
+            plan=round(min(scores.plan, cap), 2),
+            monitor=round(min(scores.monitor, cap), 2),
+            evaluate=round(min(scores.evaluate, cap), 2),
+            adapt=round(min(scores.adapt, cap), 2),
+        )
+
+    def _is_refusal_dominant(self, turns: list[Turn]) -> bool:
+        if not turns:
+            return False
+        refusal_hits = 0
+        for turn in turns:
+            answer = self._turn_answer(turn)
+            if any(pattern in answer for pattern in _REFUSAL_PATTERNS):
+                refusal_hits += 1
+        return refusal_hits / len(turns) >= 0.5
+
+    def _is_keyword_stuffing_dominant(self, turns: list[Turn]) -> bool:
+        if not turns:
+            return False
+        stuffing_hits = 0
+        for turn in turns:
+            answer = self._turn_answer(turn)
+            if len(answer) < 12:
+                continue
+            token_count = len(_TOKEN_RE.findall(answer))
+            if token_count <= 0:
+                continue
+            signal_hits = sum(1 for term in _SIGNAL_TERMS if term in answer)
+            residual = answer
+            for term in _SIGNAL_TERMS_SORTED:
+                residual = residual.replace(term, " ")
+            residual = _NON_SEMANTIC_RE.sub("", residual)
+            if signal_hits >= 6 and len(residual) <= 4:
+                stuffing_hits += 1
+        return stuffing_hits / len(turns) >= 0.34
+
+    def _turn_answer(self, turn: Turn) -> str:
+        if turn.preprocess and turn.preprocess.clean_text:
+            return turn.preprocess.clean_text.lower()
+        return str(turn.input.text or "").lower()
