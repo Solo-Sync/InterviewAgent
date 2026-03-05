@@ -13,7 +13,12 @@ from libs.schemas.base import (
     ScaffoldLevel,
 )
 from services.evaluation.discount import DiscountPolicy
-from services.evaluation.judges import build_default_judges, default_reason_for_dimension
+from services.evaluation.judges import (
+    build_default_judges,
+    build_turn_level_judges,
+    default_reason_for_dimension,
+)
+from services.evaluation.interfaces import EvaluationJudge
 from services.evaluation.models import DIMENSIONS, ScoreResult
 from services.evaluation.result_aggregator import ResultAggregator
 from services.evaluation.scorer import Scorer
@@ -28,8 +33,20 @@ logger = logging.getLogger(__name__)
 
 
 class ScoreAggregator:
-    def __init__(self) -> None:
-        self.scorer = Scorer(build_default_judges())
+    def __init__(
+        self,
+        *,
+        judge_mode: str = "llm",
+        judges: list[EvaluationJudge] | None = None,
+    ) -> None:
+        if judges is None:
+            if judge_mode == "turn_aux":
+                judges = build_turn_level_judges()
+            elif judge_mode == "llm":
+                judges = build_default_judges()
+            else:
+                raise ValueError(f"unknown judge_mode: {judge_mode}")
+        self.scorer = Scorer(judges)
         self.result_aggregator = ResultAggregator()
         self.discount_policy = DiscountPolicy()
 

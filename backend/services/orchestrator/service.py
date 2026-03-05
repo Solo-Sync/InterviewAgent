@@ -35,6 +35,7 @@ from libs.storage.postgres import SqlStore
 from sqlalchemy.exc import IntegrityError
 from services.asr import ASRService
 from services.evaluation.aggregator import ScoreAggregator
+from services.evaluation.session_scorer import SessionScorer
 from services.nlp.preprocess import Preprocessor
 from services.orchestrator.policy import OrchestratorPolicy
 from services.orchestrator.selector import QuestionSelector
@@ -59,7 +60,8 @@ class OrchestratorService:
         self.safety = SafetyClassifier()
         self.trigger_detector = TriggerDetector()
         self.scaffold = ScaffoldGenerator()
-        self.scoring = ScoreAggregator()
+        self.scoring = ScoreAggregator(judge_mode="turn_aux")
+        self.session_scoring = SessionScorer()
         self.asr_service = ASRService()
         self.file_store = FileStore()
         self.store = SqlStore(settings.database_url)
@@ -556,10 +558,8 @@ class OrchestratorService:
                 raise KeyError("session not found")
 
             turns = self.store.list_turns_tx(db, session_id)
-            if turns and turns[-1].evaluation is not None:
-                latest = session.theta or turns[-1].evaluation.scores
-            else:
-                latest = session.theta or DimScores(plan=0.0, monitor=0.0, evaluate=0.0, adapt=0.0)
+            session_score = self.session_scoring.score_session(turns)
+            latest = session_score.scores
             timeline = [
                 ReportPoint(
                     turn_index=t.turn_index,
@@ -567,7 +567,8 @@ class OrchestratorService:
                 )
                 for t in turns
             ]
-            report = Report(overall=latest, timeline=timeline, notes=[f"ended:{reason}"])
+            report_notes = [f"ended:{reason}", *session_score.notes]
+            report = Report(overall=latest, timeline=timeline, notes=report_notes)
             self.store.upsert_report(db, session_id, report)
             end_action = NextAction(type=NextActionType.END, text="Session closed.")
             self.store.update_session(
@@ -587,6 +588,9 @@ class OrchestratorService:
                 "session_ended",
                 session_id=session_id,
                 reason=reason,
+                session_score_source=session_score.source,
+                session_score_confidence=session_score.confidence,
+                session_score=latest.model_dump(mode="json"),
             )
             return report
 
