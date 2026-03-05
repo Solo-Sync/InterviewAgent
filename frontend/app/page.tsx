@@ -6,12 +6,12 @@ import { AdminDashboard } from "@/components/admin-dashboard"
 import { AdminReview } from "@/components/admin-review"
 import { CandidateInterview } from "@/components/candidate-interview"
 import { signOut } from "@/lib/auth-client"
-import type { AppView, AuthSession, Candidate } from "@/lib/types"
+import type { AdminSessionSummary, AppView, AuthSession } from "@/lib/types"
 
 export default function Home() {
   const [view, setView] = useState<AppView>("login")
   const [authSession, setAuthSession] = useState<AuthSession | null>(null)
-  const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null)
+  const [selectedSession, setSelectedSession] = useState<AdminSessionSummary | null>(null)
 
   const handleLogin = (session: AuthSession) => {
     setAuthSession(session)
@@ -26,16 +26,16 @@ export default function Home() {
     void signOut()
     setAuthSession(null)
     setView("login")
-    setSelectedCandidate(null)
+    setSelectedSession(null)
   }
 
-  const handleReviewCandidate = (candidate: Candidate) => {
-    setSelectedCandidate(candidate)
+  const handleReviewSession = (session: AdminSessionSummary) => {
+    setSelectedSession(session)
     setView("admin-review")
   }
 
   const handleBackToDashboard = () => {
-    setSelectedCandidate(null)
+    setSelectedSession(null)
     setView("admin-dashboard")
   }
 
@@ -45,13 +45,13 @@ export default function Home() {
     case "admin-dashboard":
       return (
         <AdminDashboard
-          onReviewCandidate={handleReviewCandidate}
+          onReviewSession={handleReviewSession}
           onLogout={handleLogout}
         />
       )
     case "admin-review":
-      return selectedCandidate ? (
-        <AdminReview candidate={selectedCandidate} onBack={handleBackToDashboard} />
+      return selectedSession ? (
+        <AdminReview sessionSummary={selectedSession} onBack={handleBackToDashboard} />
       ) : null
     case "candidate-interview":
       return authSession?.candidateId ? (

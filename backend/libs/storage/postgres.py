@@ -6,12 +6,14 @@ from typing import Any, Iterator
 
 from sqlalchemy import JSON, TIMESTAMP, Column, Index, Integer, MetaData, String, Table, Text, UniqueConstraint
 from sqlalchemy import create_engine, func, select
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from libs.schemas.base import NextAction, Report, Session as SessionModel, Turn
 
 
 metadata = MetaData()
+_UNSET = object()
 
 sessions_table = Table(
     "sessions",
@@ -24,6 +26,8 @@ sessions_table = Table(
     Column("scaffold_policy_id", String, nullable=False),
     Column("candidate", JSON, nullable=True),
     Column("thresholds", JSON, nullable=True),
+    Column("current_question_cursor", JSON, nullable=True),
+    Column("theta", JSON, nullable=True),
     Column("last_next_action", JSON, nullable=True),
     Column("created_at", TIMESTAMP(timezone=True), nullable=False),
     Column("ended_at", TIMESTAMP(timezone=True), nullable=True),
@@ -81,12 +85,10 @@ Index("idx_events_session_created_at", events_table.c.session_id, events_table.c
 
 class SqlStore:
     def __init__(self, database_url: str) -> None:
-        connect_args: dict[str, Any] = {}
-        if database_url.startswith("sqlite"):
-            connect_args = {"check_same_thread": False}
-        self.engine = create_engine(database_url, future=True, pool_pre_ping=True, connect_args=connect_args)
-        self._supports_for_update = self.engine.dialect.name == "postgresql"
-        metadata.create_all(self.engine)
+        backend_name = make_url(database_url).get_backend_name()
+        if backend_name != "postgresql":
+            raise ValueError("SqlStore requires a PostgreSQL DATABASE_URL")
+        self.engine = create_engine(database_url, future=True, pool_pre_ping=True)
 
     @contextmanager
     def transaction(self) -> Iterator[Session]:
@@ -105,6 +107,12 @@ class SqlStore:
                 scaffold_policy_id=session.scaffold_policy_id,
                 candidate=session.candidate.model_dump() if session.candidate else None,
                 thresholds=session.thresholds.model_dump() if session.thresholds else None,
+                current_question_cursor=(
+                    session.current_question_cursor.model_dump(mode="json")
+                    if session.current_question_cursor
+                    else None
+                ),
+                theta=session.theta.model_dump(mode="json") if session.theta else None,
                 last_next_action=next_action.model_dump(mode="json"),
                 created_at=session.created_at,
                 ended_at=None,
@@ -120,10 +128,17 @@ class SqlStore:
             )
         return self._row_to_session(row)
 
+    def list_sessions(self) -> list[SessionModel]:
+        with Session(self.engine) as db:
+            rows = (
+                db.execute(select(sessions_table).order_by(sessions_table.c.created_at.desc()))
+                .mappings()
+                .all()
+            )
+        return [session for row in rows if (session := self._row_to_session(row)) is not None]
+
     def get_session_for_update(self, db: Session, session_id: str) -> SessionModel | None:
-        query = select(sessions_table).where(sessions_table.c.session_id == session_id)
-        if self._supports_for_update:
-            query = query.with_for_update()
+        query = select(sessions_table).where(sessions_table.c.session_id == session_id).with_for_update()
         row = db.execute(query).mappings().first()
         return self._row_to_session(row)
 
@@ -134,11 +149,17 @@ class SqlStore:
         *,
         state: str,
         last_next_action: NextAction | None = None,
+        current_question_cursor: dict[str, Any] | None | object = _UNSET,
+        theta: dict[str, Any] | None | object = _UNSET,
         ended_at: datetime | None = None,
     ) -> None:
         values: dict[str, Any] = {"state": state}
         if last_next_action is not None:
             values["last_next_action"] = last_next_action.model_dump(mode="json")
+        if current_question_cursor is not _UNSET:
+            values["current_question_cursor"] = current_question_cursor
+        if theta is not _UNSET:
+            values["theta"] = theta
         if ended_at is not None:
             values["ended_at"] = ended_at
         db.execute(sessions_table.update().where(sessions_table.c.session_id == session_id).values(**values))
@@ -157,10 +178,12 @@ class SqlStore:
         return NextAction.model_validate(row["last_next_action"])
 
     def get_next_turn_index(self, db: Session, session_id: str) -> int:
-        count = db.execute(
-            select(func.count()).select_from(turns_table).where(turns_table.c.session_id == session_id)
+        latest = db.execute(
+            select(func.max(turns_table.c.turn_index)).where(turns_table.c.session_id == session_id)
         ).scalar_one()
-        return int(count)
+        if latest is None:
+            return 0
+        return int(latest) + 1
 
     def get_turn_by_idempotency(self, db: Session, session_id: str, idempotency_key: str) -> Turn | None:
         row = (
@@ -176,6 +199,10 @@ class SqlStore:
         if not row:
             return None
         return Turn.model_validate(row["turn_payload"])
+
+    def find_turn_by_idempotency(self, session_id: str, idempotency_key: str) -> Turn | None:
+        with Session(self.engine) as db:
+            return self.get_turn_by_idempotency(db, session_id, idempotency_key)
 
     def insert_turn(self, db: Session, session_id: str, turn: Turn, idempotency_key: str | None = None) -> None:
         db.execute(
@@ -214,6 +241,21 @@ class SqlStore:
         rows = db.execute(query).mappings().all()
         return [Turn.model_validate(row["turn_payload"]) for row in rows]
 
+    def list_recent_turns_tx(self, db: Session, session_id: str, limit: int) -> list[Turn]:
+        rows = (
+            db.execute(
+                select(turns_table.c.turn_payload)
+                .where(turns_table.c.session_id == session_id)
+                .order_by(turns_table.c.turn_index.desc())
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        turns = [Turn.model_validate(row["turn_payload"]) for row in rows]
+        turns.reverse()
+        return turns
+
     def count_turns(self, session_id: str) -> int:
         with Session(self.engine) as db:
             count = db.execute(
@@ -235,6 +277,19 @@ class SqlStore:
         if not row:
             return None
         return Turn.model_validate(row["turn_payload"])
+
+    def turn_belongs_to_session(self, db: Session, session_id: str, turn_id: str) -> bool:
+        row = (
+            db.execute(
+                select(turns_table.c.turn_id).where(
+                    turns_table.c.session_id == session_id,
+                    turns_table.c.turn_id == turn_id,
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return row is not None
 
     def append_events(self, db: Session, events: list[dict[str, Any]]) -> None:
         if not events:
@@ -332,6 +387,8 @@ class SqlStore:
             "scoring_policy_id": row["scoring_policy_id"],
             "scaffold_policy_id": row["scaffold_policy_id"],
             "thresholds": row["thresholds"],
+            "current_question_cursor": row.get("current_question_cursor"),
+            "theta": row.get("theta"),
             "created_at": row["created_at"],
         }
         return SessionModel.model_validate(payload)

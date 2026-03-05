@@ -4,13 +4,17 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from apps.api.core.auth import AuthPrincipal, AuthRole, require_roles
+from apps.api.core.dependencies import get_orchestrator
 from apps.api.core.response import ok
 from libs.schemas.api import (
+    ApiResponseAdminSessionDetail,
+    ApiResponseAdminSessionList,
     ApiResponseQuestionSetGet,
     ApiResponseQuestionSetList,
     ApiResponseRubricGet,
     ApiResponseRubricList,
 )
+from services.orchestrator.service import OrchestratorService
 
 router = APIRouter(tags=["admin"])
 
@@ -95,3 +99,49 @@ def get_rubric(
         "scale": payload.get("scale", {}),
     }
     return ok(request, {"rubric": rubric})
+
+
+@router.get("/admin/sessions", response_model=ApiResponseAdminSessionList)
+def list_sessions(
+    request: Request,
+    orchestrator: OrchestratorService = Depends(get_orchestrator),
+    _: AuthPrincipal = Depends(require_roles(AuthRole.ADMIN)),
+):
+    items = []
+    for session in orchestrator.list_sessions():
+        items.append(
+            {
+                "session": session.model_dump(),
+                "turn_count": orchestrator.count_turns(session.session_id),
+                "report": (
+                    report.model_dump()
+                    if (report := orchestrator.get_report(session.session_id)) is not None
+                    else None
+                ),
+            }
+        )
+    return ok(request, {"items": items})
+
+
+@router.get("/admin/sessions/{session_id}", response_model=ApiResponseAdminSessionDetail)
+def get_session_detail(
+    request: Request,
+    session_id: str,
+    orchestrator: OrchestratorService = Depends(get_orchestrator),
+    _: AuthPrincipal = Depends(require_roles(AuthRole.ADMIN)),
+):
+    session = orchestrator.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    turns, _ = orchestrator.list_turns(session_id, limit=200, cursor=None)
+    report = orchestrator.get_report(session_id)
+    return ok(
+        request,
+        {
+            "session": session.model_dump(),
+            "turns": [turn.model_dump() for turn in turns],
+            "report": report.model_dump() if report is not None else None,
+            "opening_prompt": orchestrator.get_opening_prompt(session.question_set_id),
+        },
+    )

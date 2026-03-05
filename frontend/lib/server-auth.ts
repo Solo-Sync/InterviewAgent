@@ -13,18 +13,3 @@ export function authCookieOptions(maxAge: number) {
     maxAge,
   }
 }
-
-export function candidateIdFromEmail(email: string) {
-  const normalized = email.trim().toLowerCase()
-  const slug = normalized.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")
-  return `candidate_${slug || "user"}`
-}
-
-export function displayNameFromEmail(email: string) {
-  const localPart = email.trim().split("@")[0] || "candidate"
-  const words = localPart
-    .split(/[._-]+/)
-    .filter(Boolean)
-    .map((part) => part[0]?.toUpperCase() + part.slice(1))
-  return words.join(" ") || "Candidate"
-}

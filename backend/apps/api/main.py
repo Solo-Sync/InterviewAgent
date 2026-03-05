@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -7,7 +9,11 @@ from apps.api.core.config import settings
 from apps.api.core.response import err_payload
 from apps.api.middleware.trace import TraceIDMiddleware
 from apps.api.routers import admin, annotation, asr, auth, evaluation, health, nlp, safety, scaffold, sessions
+from libs.observability import configure_logging, log_event
 from libs.schemas.base import ErrorCode
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 app.add_middleware(TraceIDMiddleware)
@@ -15,6 +21,15 @@ app.add_middleware(TraceIDMiddleware)
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    log_event(
+        logger,
+        logging.WARNING,
+        "request_validation_failed",
+        method=request.method,
+        path=request.url.path,
+        status_code=400,
+        error_count=len(exc.errors()),
+    )
     return JSONResponse(
         status_code=400,
         content=err_payload(
@@ -41,6 +56,15 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         code = ErrorCode.CONFLICT.value
 
     detail = exc.detail if isinstance(exc.detail, dict) else {"detail": exc.detail}
+    log_event(
+        logger,
+        logging.WARNING if exc.status_code < 500 else logging.ERROR,
+        "http_exception",
+        method=request.method,
+        path=request.url.path,
+        status_code=exc.status_code,
+        error_code=code,
+    )
     return JSONResponse(
         status_code=exc.status_code,
         content=err_payload(request=request, code=code, message=str(exc.detail), detail=detail),
@@ -49,6 +73,15 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception(
+        "Unhandled exception",
+        extra={
+            "event_type": "unhandled_exception",
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": 500,
+        },
+    )
     return JSONResponse(
         status_code=500,
         content=err_payload(

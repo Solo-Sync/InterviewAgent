@@ -9,6 +9,56 @@ export interface AuthSession {
 
 export type CandidateStatus = "pending" | "in-progress" | "completed"
 
+export interface ScoreDimensions {
+  plan: number
+  monitor: number
+  evaluate: number
+  adapt: number
+}
+
+export interface SessionCandidate {
+  candidate_id: string
+  display_name: string | null
+}
+
+export interface InterviewSessionRecord {
+  session_id: string
+  candidate: SessionCandidate | null
+  mode: string
+  state: string
+  question_set_id: string
+  scoring_policy_id: string
+  scaffold_policy_id: string
+  created_at: string
+}
+
+export interface InterviewTurnRecord {
+  turn_id: string
+  turn_index: number
+  input: {
+    type: string
+    text: string | null
+    audio_url?: string | null
+    audio_id?: string | null
+  }
+  next_action?: {
+    type: string
+    text: string | null
+    level: string | null
+    payload: Record<string, unknown> | null
+  } | null
+  created_at: string
+}
+
+export interface SessionReport {
+  overall: ScoreDimensions
+  timeline: Array<{
+    turn_index: number
+    scores: ScoreDimensions
+  }>
+  notes?: string[] | null
+}
+
 export interface Candidate {
   id: string
   name: string
@@ -24,6 +74,19 @@ export interface ChatMessage {
   sender: "system" | "user"
   text: string
   timestamp: string
+}
+
+export interface AdminSessionSummary {
+  session: InterviewSessionRecord
+  turn_count: number
+  report: SessionReport | null
+}
+
+export interface AdminSessionDetail {
+  session: InterviewSessionRecord
+  turns: InterviewTurnRecord[]
+  report: SessionReport | null
+  opening_prompt: string | null
 }
 
 export type InterviewState = "idle" | "recording" | "processing"

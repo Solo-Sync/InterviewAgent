@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -211,11 +211,33 @@ class RubricGetData(BaseModel):
     rubric: RubricDetail
 
 
+class AdminSessionSummary(BaseModel):
+    session: Session
+    turn_count: int
+    report: Report | None = None
+
+
+class AdminSessionDetailData(BaseModel):
+    session: Session
+    turns: list[Turn]
+    report: Report | None = None
+    opening_prompt: str | None = None
+
+
+class AdminSessionListData(BaseModel):
+    items: list[AdminSessionSummary]
+
+
 class HealthData(BaseModel):
     service: str
     version: str
+    status: Literal["ready", "degraded", "not_configured", "unavailable"]
     llm_ready: bool
     asr_ready: bool
+    llm_status: Literal["ready", "degraded", "not_configured", "unavailable"]
+    asr_status: Literal["ready", "degraded", "not_configured", "unavailable"]
+    llm_detail: str | None = None
+    asr_detail: str | None = None
 
 
 class AsrTranscribeRequest(BaseModel):
@@ -311,3 +333,11 @@ class ApiResponseRubricList(_ApiResponseSuccessBase):
 
 class ApiResponseRubricGet(_ApiResponseSuccessBase):
     data: RubricGetData
+
+
+class ApiResponseAdminSessionList(_ApiResponseSuccessBase):
+    data: AdminSessionListData
+
+
+class ApiResponseAdminSessionDetail(_ApiResponseSuccessBase):
+    data: AdminSessionDetailData

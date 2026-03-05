@@ -43,5 +43,6 @@ Thumbs.db
 # Runtime logs and temp
 *.log
 tmp/
+artifacts/
 *.db
 backend/*.db

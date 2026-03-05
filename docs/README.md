@@ -29,6 +29,7 @@
 ## 统一规范（新增）
 
 - [13_model_and_package_conventions.md](13_model_and_package_conventions.md) — 模型与包结构统一约定（单一契约来源、adapter 映射、ASR 落位）
+- [16_production_readiness_gap.md](16_production_readiness_gap.md) — 生产化差距评估、优先级拆分与 AI 修复任务单
 
 ## 附录
 

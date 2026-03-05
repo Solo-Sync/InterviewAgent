@@ -1,8 +1,10 @@
 import logging
 import tempfile
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
+from libs.readiness import ReadinessProbe
 from services.asr.config import ASRConfig
 from services.asr.models import (
     ASRDomainResult,
@@ -20,6 +22,18 @@ class FunASREngine:
         self.config = config or ASRConfig()
         self._model = None
         self._load_error: Exception | None = None
+
+    def readiness(self) -> ReadinessProbe:
+        if self._model is not None:
+            return ReadinessProbe(status="ready")
+        if self._load_error is not None:
+            return ReadinessProbe(status="degraded", detail=str(self._load_error) or None)
+        if find_spec("funasr") is None:
+            return ReadinessProbe(
+                status="unavailable",
+                detail="funasr dependency is not installed",
+            )
+        return ReadinessProbe(status="ready")
 
     def _ensure_model(self) -> None:
         if self._model is not None:

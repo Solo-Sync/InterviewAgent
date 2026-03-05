@@ -1,12 +1,5 @@
-import { cookies } from "next/headers"
 import { NextResponse } from "next/server"
-import {
-  authCookieOptions,
-  backendOrigin,
-  candidateIdFromEmail,
-  displayNameFromEmail,
-  SESSION_COOKIE_NAME,
-} from "@/lib/server-auth"
+import { authCookieOptions, backendOrigin, SESSION_COOKIE_NAME } from "@/lib/server-auth"
 
 type LoginBody = {
   role?: "admin" | "candidate"
@@ -30,8 +23,6 @@ export async function POST(request: Request) {
           role,
           email,
           password,
-          candidate_id: candidateIdFromEmail(email),
-          display_name: displayNameFromEmail(email),
         }
       : {
           role,
@@ -69,14 +60,7 @@ export async function POST(request: Request) {
     )
   }
 
-  const cookieStore = await cookies()
-  cookieStore.set(
-    SESSION_COOKIE_NAME,
-    payload.data.access_token,
-    authCookieOptions(payload.data.expires_in)
-  )
-
-  return NextResponse.json({
+  const response = NextResponse.json({
     user: {
       role: payload.data.role,
       email,
@@ -84,4 +68,10 @@ export async function POST(request: Request) {
       displayName: payload.data.display_name ?? null,
     },
   })
+  response.cookies.set(
+    SESSION_COOKIE_NAME,
+    payload.data.access_token,
+    authCookieOptions(payload.data.expires_in)
+  )
+  return response
 }

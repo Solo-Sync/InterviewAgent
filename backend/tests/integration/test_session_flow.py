@@ -5,7 +5,8 @@ from fastapi.testclient import TestClient
 from apps.api.core.auth import AuthRole, issue_access_token
 from apps.api.core.dependencies import orchestrator
 from apps.api.main import app
-from libs.schemas.base import AsrResult
+from libs.schemas.base import AsrResult, DimScores, EvaluationResult
+from libs.storage.files import FileStore
 
 CANDIDATE_HEADERS = {
     "Authorization": (
@@ -78,6 +79,202 @@ def test_session_turn_help_trigger_applies_l2_discount() -> None:
     assert payload["next_action"]["level"] == "L2"
     assert payload["evaluation"]["discounts"] is not None
     assert len(payload["evaluation"]["discounts"]) >= 1
+
+
+def test_session_turn_routes_low_plan_answer_to_plan_probe(monkeypatch) -> None:
+    client = TestClient(app)
+    client.headers.update(
+        {
+            "Authorization": (
+                f"Bearer {issue_access_token(subject='plan.low@email.com', role=AuthRole.CANDIDATE, candidate_id='stu_plan')[0]}"
+            )
+        }
+    )
+    monkeypatch.setattr(
+        orchestrator.scoring,
+        "score",
+        lambda *args, **kwargs: EvaluationResult(
+            scores=DimScores(plan=0.7, monitor=2.1, evaluate=2.0, adapt=1.8),
+            final_confidence=0.92,
+        ),
+    )
+
+    create_resp = client.post(
+        "/api/v1/sessions",
+        json={
+            "candidate": {"candidate_id": "stu_plan", "display_name": "Plan Low"},
+            "mode": "text",
+            "question_set_id": "qs_fermi_v1",
+            "scoring_policy_id": "rubric_v1",
+            "scaffold_policy_id": "scaffold_v1",
+        },
+    )
+    assert create_resp.status_code == 200
+    opening_prompt = create_resp.json()["data"]["next_action"]["text"]
+    session_id = create_resp.json()["data"]["session"]["session_id"]
+
+    turn_resp = client.post(
+        f"/api/v1/sessions/{session_id}/turns",
+        json={"input": {"type": "text", "text": "我觉得差不多有很多杯。"}},
+    )
+    assert turn_resp.status_code == 200
+    payload = turn_resp.json()["data"]
+    assert payload["turn"]["question"]["text"] == opening_prompt
+    assert payload["next_action"]["type"] == "PROBE"
+    assert payload["next_action"]["text"] == "请先不要给最终答案，说说你第一步准备做什么？"
+
+
+def test_session_turn_routes_high_quality_answer_to_perturbation(monkeypatch) -> None:
+    client = TestClient(app)
+    client.headers.update(
+        {
+            "Authorization": (
+                f"Bearer {issue_access_token(subject='good.flow@email.com', role=AuthRole.CANDIDATE, candidate_id='stu_good')[0]}"
+            )
+        }
+    )
+    monkeypatch.setattr(
+        orchestrator.scoring,
+        "score",
+        lambda *args, **kwargs: EvaluationResult(
+            scores=DimScores(plan=2.4, monitor=2.2, evaluate=2.3, adapt=2.1),
+            final_confidence=0.88,
+        ),
+    )
+
+    create_resp = client.post(
+        "/api/v1/sessions",
+        json={
+            "candidate": {"candidate_id": "stu_good", "display_name": "Good Flow"},
+            "mode": "text",
+            "question_set_id": "qs_fermi_v1",
+            "scoring_policy_id": "rubric_v1",
+            "scaffold_policy_id": "scaffold_v1",
+        },
+    )
+    assert create_resp.status_code == 200
+    session_id = create_resp.json()["data"]["session"]["session_id"]
+
+    turn_resp = client.post(
+        f"/api/v1/sessions/{session_id}/turns",
+        json={"input": {"type": "text", "text": "我会先定义总体范围，拆分消费频次，再用常识交叉验证数量级。"}},
+    )
+    assert turn_resp.status_code == 200
+    payload = turn_resp.json()["data"]
+    assert payload["next_action"]["type"] == "ASK"
+    assert payload["next_action"]["text"] == "如果只能用 2 分钟，你会怎么简化这个估算？"
+
+
+def test_session_turn_routes_stress_signal_to_calm() -> None:
+    client = TestClient(app)
+    client.headers.update(CANDIDATE_HEADERS)
+
+    create_resp = client.post(
+        "/api/v1/sessions",
+        json={
+            "candidate": {"candidate_id": "stu_001", "display_name": "Alice"},
+            "mode": "text",
+            "question_set_id": "qs_fermi_v1",
+            "scoring_policy_id": "rubric_v1",
+            "scaffold_policy_id": "scaffold_v1",
+        },
+    )
+    assert create_resp.status_code == 200
+    session_id = create_resp.json()["data"]["session"]["session_id"]
+
+    turn_resp = client.post(
+        f"/api/v1/sessions/{session_id}/turns",
+        json={"input": {"type": "text", "text": "我现在很紧张，有点慌，脑子一片空白。"}},
+    )
+    assert turn_resp.status_code == 200
+    payload = turn_resp.json()["data"]
+    assert payload["next_action"]["type"] == "CALM"
+    assert "慢一点也没关系" in payload["next_action"]["text"]
+
+
+def test_session_turn_routes_repeated_answer_to_loop_scaffold() -> None:
+    client = TestClient(app)
+    client.headers.update(CANDIDATE_HEADERS)
+
+    create_resp = client.post(
+        "/api/v1/sessions",
+        json={
+            "candidate": {"candidate_id": "stu_001", "display_name": "Alice"},
+            "mode": "text",
+            "question_set_id": "qs_fermi_v1",
+            "scoring_policy_id": "rubric_v1",
+            "scaffold_policy_id": "scaffold_v1",
+        },
+    )
+    assert create_resp.status_code == 200
+    session_id = create_resp.json()["data"]["session"]["session_id"]
+
+    answer = "我会先定义范围再拆分变量，然后验证数量级。"
+    first_turn = client.post(
+        f"/api/v1/sessions/{session_id}/turns",
+        json={"input": {"type": "text", "text": answer}},
+    )
+    assert first_turn.status_code == 200
+
+    second_turn = client.post(
+        f"/api/v1/sessions/{session_id}/turns",
+        json={"input": {"type": "text", "text": answer}},
+    )
+    assert second_turn.status_code == 200
+    payload = second_turn.json()["data"]
+    assert payload["next_action"]["type"] == "SCAFFOLD"
+    assert payload["next_action"]["level"] == "L1"
+    assert payload["next_action"]["text"] == "先明确目标，再列出两步可执行计划。"
+
+
+def test_session_turn_advances_to_second_question_after_exhausting_first_branch(monkeypatch) -> None:
+    client = TestClient(app)
+    client.headers.update(
+        {
+            "Authorization": (
+                f"Bearer {issue_access_token(subject='branch@email.com', role=AuthRole.CANDIDATE, candidate_id='stu_branch')[0]}"
+            )
+        }
+    )
+    monkeypatch.setattr(
+        orchestrator.scoring,
+        "score",
+        lambda *args, **kwargs: EvaluationResult(
+            scores=DimScores(plan=2.5, monitor=2.4, evaluate=2.4, adapt=2.3),
+            final_confidence=0.9,
+        ),
+    )
+
+    create_resp = client.post(
+        "/api/v1/sessions",
+        json={
+            "candidate": {"candidate_id": "stu_branch", "display_name": "Branch Flow"},
+            "mode": "text",
+            "question_set_id": "qs_fermi_v1",
+            "scoring_policy_id": "rubric_v1",
+            "scaffold_policy_id": "scaffold_v1",
+        },
+    )
+    assert create_resp.status_code == 200
+    session_id = create_resp.json()["data"]["session"]["session_id"]
+
+    observed_prompts: list[str] = []
+    answers = [
+        "我会先定义总体范围，再拆分消费频次和客单量，并做交叉验证。",
+        "如果只剩两分钟，我会保留最关键的两个变量，先做数量级估算。",
+        "我会把人口、购买频次和转化率拆开，优先选最敏感的因子。",
+        "拿不到数据时，我会先给上下界，再通过常识和反证缩小误差。",
+        "如果要再检查一次，我会用反向估算和极值假设复核结果。",
+    ]
+    for answer in answers:
+        turn_resp = client.post(
+            f"/api/v1/sessions/{session_id}/turns",
+            json={"input": {"type": "text", "text": answer}},
+        )
+        assert turn_resp.status_code == 200
+        observed_prompts.append(turn_resp.json()["data"]["next_action"]["text"])
+
+    assert "如果你完全拿不到统计数据，只能靠常识估算，你会如何控制误差？" in observed_prompts
 
 
 def test_session_create_rejects_invalid_rubric_id() -> None:
@@ -174,6 +371,87 @@ def test_session_turn_audio_ref_flow(monkeypatch) -> None:
     assert turn_resp.status_code == 200
     turn = turn_resp.json()["data"]["turn"]
     assert turn["asr"]["raw_text"] == "这是语音转写"
+
+
+def test_session_turn_audio_id_flow(monkeypatch, tmp_path) -> None:
+    client = TestClient(app)
+    client.headers.update(
+        {
+            "Authorization": (
+                f"Bearer {issue_access_token(subject='mike@email.com', role=AuthRole.CANDIDATE, candidate_id='stu_006')[0]}"
+            )
+        }
+    )
+
+    store = FileStore(str(tmp_path / "audio-store"))
+    store.path_for("sample.wav").write_bytes(b"fake-audio-bytes")
+    monkeypatch.setattr(orchestrator, "file_store", store)
+    monkeypatch.setattr(
+        orchestrator.asr_service,
+        "transcribe",
+        lambda **_: AsrResult(
+            raw_text="这是来自 audio_id 的转写",
+            tokens=[],
+            silence_segments=[],
+            audio_features={"backend": "mock"},
+        ),
+    )
+
+    create_resp = client.post(
+        "/api/v1/sessions",
+        json={
+            "candidate": {"candidate_id": "stu_006", "display_name": "Mike"},
+            "mode": "audio",
+            "question_set_id": "qs_fermi_v1",
+            "scoring_policy_id": "rubric_v1",
+            "scaffold_policy_id": "scaffold_v1",
+        },
+    )
+    assert create_resp.status_code == 200
+    session_id = create_resp.json()["data"]["session"]["session_id"]
+
+    turn_resp = client.post(
+        f"/api/v1/sessions/{session_id}/turns",
+        json={"input": {"type": "audio_ref", "audio_id": "sample.wav"}},
+    )
+    assert turn_resp.status_code == 200
+    turn = turn_resp.json()["data"]["turn"]
+    assert turn["asr"]["raw_text"] == "这是来自 audio_id 的转写"
+
+
+def test_session_turn_audio_id_rejects_path_traversal(monkeypatch, tmp_path) -> None:
+    client = TestClient(app)
+    client.headers.update(
+        {
+            "Authorization": (
+                f"Bearer {issue_access_token(subject='nina@email.com', role=AuthRole.CANDIDATE, candidate_id='stu_007')[0]}"
+            )
+        }
+    )
+
+    monkeypatch.setattr(orchestrator, "file_store", FileStore(str(tmp_path / "audio-store")))
+
+    create_resp = client.post(
+        "/api/v1/sessions",
+        json={
+            "candidate": {"candidate_id": "stu_007", "display_name": "Nina"},
+            "mode": "audio",
+            "question_set_id": "qs_fermi_v1",
+            "scoring_policy_id": "rubric_v1",
+            "scaffold_policy_id": "scaffold_v1",
+        },
+    )
+    assert create_resp.status_code == 200
+    session_id = create_resp.json()["data"]["session"]["session_id"]
+
+    turn_resp = client.post(
+        f"/api/v1/sessions/{session_id}/turns",
+        json={"input": {"type": "audio_ref", "audio_id": "../../backend/.env"}},
+    )
+    assert turn_resp.status_code == 400
+    payload = turn_resp.json()
+    assert payload["error"]["code"] == "INVALID_ARGUMENT"
+    assert "invalid audio_id" in payload["error"]["message"]
 
 
 def test_session_turn_audio_ref_rejects_remote_url_by_default() -> None:

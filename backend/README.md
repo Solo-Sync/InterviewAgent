@@ -4,10 +4,17 @@ FastAPI backend for metacog-interview.
 
 ## Run
 
+Backend is PostgreSQL-only. SQLite is not supported.
+
 ```bash
+cp .env.example .env
 uv sync
+uv run alembic upgrade head
 uv run uvicorn apps.api.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+应用启动前必须先执行数据库迁移；后端不再通过运行时 `create_all()` 自动建表。
+本地若未运行 PostgreSQL，可在仓库根目录执行 `docker compose -f infra/docker-compose.yml up -d postgres`。
 
 使用 `.env` 指定阿里云 DashScope：
 
@@ -27,4 +34,6 @@ API prefix: `/api/v1`.
 
 Protected endpoints require a signed `Authorization: Bearer <token>`.
 Use `POST /api/v1/auth/token` to mint role-scoped tokens for `candidate`, `admin`, or `annotator`.
-Set `AUTH_TOKEN_SECRET`, `ADMIN_LOGIN_*`, and `ANNOTATOR_LOGIN_*` in server-side env for non-demo deployments.
+Candidate login is validated against `CANDIDATE_REGISTRY_PATH` using `email + invite_token`.
+Set `APP_ENV`, `AUTH_TOKEN_SECRET`, `ADMIN_LOGIN_*`, `ANNOTATOR_LOGIN_*`, and `CANDIDATE_REGISTRY_PATH` in server-side env for non-demo deployments.
+When `APP_ENV` is not `dev`, default secrets and default admin/annotator passwords will fail startup.

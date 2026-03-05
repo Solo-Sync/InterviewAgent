@@ -1,0 +1,23 @@
+[
+  {
+    "email": "sarah.chen@email.com",
+    "candidate_id": "candidate_sarah_chen",
+    "display_name": "Sarah Chen",
+    "invite_token": "invite-sarah-001",
+    "active": true
+  },
+  {
+    "email": "alice@example.com",
+    "candidate_id": "candidate_alice",
+    "display_name": "Alice",
+    "invite_token": "invite-alice-001",
+    "active": true
+  },
+  {
+    "email": "bob@example.com",
+    "candidate_id": "candidate_bob",
+    "display_name": "Bob",
+    "invite_token": "invite-bob-001",
+    "active": true
+  }
+]

@@ -60,6 +60,7 @@
 ## 11.4 安全与权限
 - 签名 access token + 角色声明（`candidate` / `admin` / `annotator`）
 - 浏览器端不要持有后台通用 bearer token；Web 前端通过 Next.js 服务端登录和 `HttpOnly` cookie 转发到后端
+- candidate 身份来源建议使用预置候选人表或邀请凭证；当前实现为 `CANDIDATE_REGISTRY_PATH` 中的 `email + invite_token` 校验
 - 角色建议：
   - `candidate_client`：仅 sessions/turns/report
   - `admin`：admin/question_sets, admin/rubrics
@@ -71,6 +72,8 @@
 ## 11.5 配置管理
 - 题库/量表：可先用本地 JSON 文件（只读），后续迁移到 DB 或配置中心
 - 阈值 thresholds：可在 session 创建时写入（便于 A/B）
+- 建议引入 `APP_ENV` 区分 dev 与非 dev；非 dev 环境下默认密钥和默认管理密码应禁止启动
+- 数据库 schema 变更统一走 Alembic；部署和启动前执行 `cd backend && uv run alembic upgrade head`
 
 ---
 

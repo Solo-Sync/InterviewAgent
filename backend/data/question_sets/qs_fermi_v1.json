@@ -4,10 +4,81 @@
   "description": "Open-ended estimation question set for freshmen.",
   "questions": [
     {
+      "qid": "q1",
       "question_id": "q1",
       "text": "估算你所在城市一天会卖出多少杯奶茶？",
-      "probes": ["请先定义人群范围", "你会如何验证估算结果？"],
-      "perturbations": ["如果只能用 2 分钟，你会怎么简化？"]
+      "probes": [
+        {
+          "id": "probe_plan",
+          "when": "plan_low",
+          "prompt": "请先不要给最终答案，说说你第一步准备做什么？"
+        },
+        {
+          "id": "probe_evaluate",
+          "when": "evaluate_low",
+          "prompt": "你会如何验证这个数量级是否合理？"
+        },
+        {
+          "id": "probe_range",
+          "when": "any_low",
+          "prompt": "先定义你估算的人群范围，再继续往下拆。"
+        }
+      ],
+      "perturbations": [
+        {
+          "id": "pert_two_min",
+          "trigger": "good_flow",
+          "prompt": "如果只能用 2 分钟，你会怎么简化这个估算？"
+        },
+        {
+          "id": "pert_scope_change",
+          "trigger": "good_flow",
+          "prompt": "如果把范围改成外卖奶茶订单量，你的拆分会怎么变？"
+        }
+      ],
+      "children": [
+        {
+          "qid": "q1_factors",
+          "text": "你会把哪些关键因素相乘或相加？为什么？",
+          "probes": [
+            {
+              "id": "probe_factor_check",
+              "when": "monitor_low",
+              "prompt": "如果其中一个因子拿不到数据，你会先检查还是替换它？"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "qid": "q2_constraints",
+      "question_id": "q2",
+      "text": "如果你完全拿不到统计数据，只能靠常识估算，你会如何控制误差？",
+      "probes": [
+        {
+          "id": "probe_monitor",
+          "when": "monitor_low",
+          "prompt": "在估算过程中，你准备在哪一步停下来检查假设是否偏掉？"
+        },
+        {
+          "id": "probe_adapt",
+          "when": "adapt_low",
+          "prompt": "如果发现原来的拆分不可用，你的备用方案是什么？"
+        }
+      ],
+      "perturbations": [
+        {
+          "id": "pert_reverse_check",
+          "trigger": "good_flow",
+          "prompt": "你会不会用反向估算来交叉检查？如果会，怎么做？"
+        }
+      ],
+      "children": [
+        {
+          "qid": "q2_tradeoff",
+          "text": "在速度和准确性之间，你会怎么取舍？请说明判断标准。"
+        }
+      ]
     }
   ]
 }

@@ -22,7 +22,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
   useEffect(() => {
     setEmail(selectedRole === "admin" ? "admin@company.com" : "sarah.chen@email.com")
-    setPassword("password123")
+    setPassword(selectedRole === "admin" ? "password123" : "invite-sarah-001")
     setErrorText(null)
   }, [selectedRole])
 
@@ -40,7 +40,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
         <Card className="border-border shadow-lg">
           <CardHeader className="pb-4">
             <CardTitle className="text-lg text-foreground">Sign In</CardTitle>
-            <CardDescription>Choose your role and enter your credentials</CardDescription>
+            <CardDescription>Choose your role and enter credentials validated by the backend</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="mb-6 flex rounded-lg border border-border bg-muted p-1">
@@ -96,11 +96,13 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                 />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="password" className="text-foreground">Password</Label>
+                <Label htmlFor="password" className="text-foreground">
+                  {selectedRole === "admin" ? "Password" : "Invite Token"}
+                </Label>
                 <Input
                   id="password"
                   type="password"
-                  placeholder="Enter your password"
+                  placeholder={selectedRole === "admin" ? "Enter your password" : "Enter your invite token"}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   className="bg-card"
@@ -111,6 +113,9 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                   {errorText}
                 </div>
               ) : null}
+              <p className="text-xs text-muted-foreground">
+                Candidate login uses email + invite token from the backend registry. Admin login uses backend credentials.
+              </p>
               <Button
                 type="submit"
                 disabled={isSubmitting}

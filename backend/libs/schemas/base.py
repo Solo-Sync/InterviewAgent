@@ -165,6 +165,14 @@ class QuestionRef(BaseModel):
     text: str | None = None
 
 
+class QuestionCursor(BaseModel):
+    node_id: str | None = None
+    prompt_id: str | None = None
+    prompt_kind: str | None = None
+    prompt_text: str | None = None
+    asked_prompt_ids: list[str] = Field(default_factory=list)
+
+
 class TurnInput(BaseModel):
     type: TurnInputType
     text: str | None = None
@@ -226,6 +234,8 @@ class Session(BaseModel):
     scoring_policy_id: str
     scaffold_policy_id: str
     thresholds: Thresholds | None = None
+    current_question_cursor: QuestionCursor | None = None
+    theta: DimScores | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

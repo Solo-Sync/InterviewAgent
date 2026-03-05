@@ -1,3 +1,5 @@
+import type { AdminSessionDetail, AdminSessionSummary } from "@/lib/types"
+
 type ApiError = {
   code: string
   message: string
@@ -47,8 +49,13 @@ export type SessionEndPayload = {
 export type HealthPayload = {
   service: string
   version: string
+  status: "ready" | "degraded" | "not_configured" | "unavailable"
   llm_ready: boolean
   asr_ready: boolean
+  llm_status: "ready" | "degraded" | "not_configured" | "unavailable"
+  asr_status: "ready" | "degraded" | "not_configured" | "unavailable"
+  llm_detail?: string | null
+  asr_detail?: string | null
 }
 
 export type QuestionSetListPayload = {
@@ -66,6 +73,12 @@ export type RubricListPayload = {
     description?: string | null
   }>
 }
+
+export type AdminSessionListPayload = {
+  items: AdminSessionSummary[]
+}
+
+export type AdminSessionDetailPayload = AdminSessionDetail
 
 function buildHeaders(init?: RequestInit): Headers {
   const headers = new Headers(init?.headers)
@@ -137,4 +150,12 @@ export async function listQuestionSets() {
 
 export async function listRubrics() {
   return request<RubricListPayload>("/api/v1/admin/rubrics")
+}
+
+export async function listAdminSessions() {
+  return request<AdminSessionListPayload>("/api/v1/admin/sessions")
+}
+
+export async function getAdminSession(sessionId: string) {
+  return request<AdminSessionDetailPayload>(`/api/v1/admin/sessions/${sessionId}`)
 }

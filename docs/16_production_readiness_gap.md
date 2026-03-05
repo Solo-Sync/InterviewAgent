@@ -20,6 +20,8 @@
 - 健康检查与真实依赖状态不一致，容易误报“可用”。
 - 前端核心流程仍是 demo/mock，不是真实业务链路。
 
+其中 G1、G3、G6、G7 已完成修复，本文保留问题描述、证据和修复记录，剩余项继续作为待办跟踪。
+
 建议按 `P0 -> P1 -> P2` 分 6 到 8 个小批次修复，每个批次只处理一类问题，必须带测试和验收命令。
 
 ---
@@ -40,12 +42,12 @@
 |---|---|---|---|---|
 | G1 | P0 | 浏览器暴露通用 Bearer Token，后端无角色隔离 | 已修复 | 通过服务端 cookie + 签名角色 token 收敛权限边界 |
 | G2 | P0 | `audio_id` 存在目录逃逸，可读工作区文件 | 存在 | 本地敏感文件泄露 |
-| G3 | P0 | 回合一致性依赖进程内锁，多 worker/多实例不安全 | 存在 | 重复 turn、幂等失效、500 |
+| G3 | P0 | 回合一致性依赖进程内锁，多 worker/多实例不安全 | 已修复 | turn 顺序与幂等收敛到数据库事务，冲突不再直接抛 500 |
 | G4 | P0 | `/health` 误报依赖就绪 | 存在 | 运维和前端误判系统可用性 |
 | G5 | P1 | 前端主流程仍是 demo/mock | 存在 | 不能作为真实候选人和管理端使用 |
-| G6 | P1 | 前端构建忽略 TypeScript 错误 | 存在 | 类型问题可直接进入线上 |
-| G7 | P2 | 数据库 schema 生命周期仍依赖 `create_all()` | 存在 | 无法可靠迁移、回滚和审计 |
-| G8 | P2 | 缺少结构化日志、指标、告警和真实链路观测 | 存在 | 故障排查成本高 |
+| G6 | P1 | 前端构建忽略 TypeScript 错误 | 已修复 | 前端生产构建恢复 TypeScript 门禁 |
+| G7 | P2 | 数据库 schema 生命周期仍依赖 `create_all()` | 已修复 | schema 生命周期改为 Alembic 迁移管理，可初始化、回滚和审计 |
+| G8 | P2 | 缺少结构化日志、指标、告警和真实链路观测 | 已修复 | 已补齐结构化日志、Prometheus 指标和 turn 阶段耗时观测 |
 | G9 | P2 | 配置默认值过于宽松，生产环境容易误启动 | 存在 | dev 配置泄露到 prod |
 
 ---
@@ -203,18 +205,24 @@
 
 ### G3. 回合一致性依赖单进程锁，多实例部署不安全
 
+**修复状态（2026-02-28）**
+- `handle_turn` / `end_session` 已移除对进程内 `SessionLockPool` 的正确性依赖。
+- turn 写入改为数据库事务内分配 `turn_index`，并在唯一约束冲突时执行恢复/重试。
+- 并发回归测试已切换到 PostgreSQL，验证路径与生产保持一致。
+- 已补“双 service 实例共享同一数据库”的并发回归测试，覆盖相同幂等键和不同请求并发两种场景。
+
 **现象**
 - `SessionLockPool` 只在 Python 进程内生效。
 - 服务是模块级单例。
 - turn 序号由 `count()` 计算。
 - 数据库有唯一约束，但业务层没有显式处理冲突和重试。
 
-**证据**
-- [backend/services/orchestrator/service.py](/home/leo/InterviewAgent/backend/services/orchestrator/service.py#L47)
-- [backend/apps/api/core/dependencies.py](/home/leo/InterviewAgent/backend/apps/api/core/dependencies.py#L1)
-- [backend/libs/storage/postgres.py](/home/leo/InterviewAgent/backend/libs/storage/postgres.py#L159)
-- [backend/libs/storage/postgres.py](/home/leo/InterviewAgent/backend/libs/storage/postgres.py#L32)
-- [docs/11_deployment.md](/home/leo/InterviewAgent/docs/11_deployment.md#L33)
+**修复证据**
+- [backend/services/orchestrator/service.py](/home/leo/InterviewAgent/backend/services/orchestrator/service.py#L105)
+- [backend/services/orchestrator/service.py](/home/leo/InterviewAgent/backend/services/orchestrator/service.py#L122)
+- [backend/libs/storage/postgres.py](/home/leo/InterviewAgent/backend/libs/storage/postgres.py#L92)
+- [backend/libs/storage/postgres.py](/home/leo/InterviewAgent/backend/libs/storage/postgres.py#L171)
+- [backend/tests/integration/test_turn_idempotency.py](/home/leo/InterviewAgent/backend/tests/integration/test_turn_idempotency.py#L31)
 
 **风险**
 - 多 worker/multi-instance 下，同一 session 并发提交可能得到相同 `turn_index`。
@@ -395,12 +403,17 @@
 
 ### G6. 前端生产构建忽略 TypeScript 错误
 
+**修复状态（2026-03-01）**
+- 已删除 `next.config.mjs` 中的 `ignoreBuildErrors: true`，Next.js 生产构建不再跳过类型校验。
+- 已重新执行 `pnpm -s lint` 与 `pnpm -s build`，当前前端可在开启 TypeScript 门禁的前提下通过构建。
+
 **现象**
 - `next.config.mjs` 中配置了 `ignoreBuildErrors: true`。
 - 当前生产构建日志会跳过类型校验。
 
-**证据**
+**修复证据**
 - [frontend/next.config.mjs](/home/leo/InterviewAgent/frontend/next.config.mjs#L1)
+- [frontend/package.json](/home/leo/InterviewAgent/frontend/package.json#L5)
 
 **风险**
 - 类型不一致会直接进入生产构建产物。
@@ -443,38 +456,39 @@
 
 ### G7. 数据库 schema 生命周期仍是原型模式
 
-**现象**
-- 应用初始化时直接 `metadata.create_all()`。
-- 虽然依赖里包含 Alembic，但仓库没有迁移资产。
-- 默认数据库仍是本地 SQLite。
+**修复状态（2026-03-01）**
+- 已初始化 Alembic，并提交首个基线迁移，覆盖当前 `sessions`、`turns`、`events`、`reports`、`annotations` schema。
+- `SqlStore` 已移除运行时 `metadata.create_all()`，应用启动不再隐式修改数据库 schema。
+- 测试改为先迁移再启动应用，开发、测试与生产的 schema 生命周期模型保持一致。
+- 已补迁移回归测试，验证“仅实例化 `SqlStore` 不会建表”以及“`upgrade head` 可完整初始化新库”。
 
-**证据**
-- [backend/libs/storage/postgres.py](/home/leo/InterviewAgent/backend/libs/storage/postgres.py#L82)
-- [backend/apps/api/core/config.py](/home/leo/InterviewAgent/backend/apps/api/core/config.py#L52)
-- [backend/pyproject.toml](/home/leo/InterviewAgent/backend/pyproject.toml#L14)
+**修复证据**
+- [backend/libs/storage/postgres.py](/home/leo/InterviewAgent/backend/libs/storage/postgres.py#L79)
+- [backend/libs/storage/migrations.py](/home/leo/InterviewAgent/backend/libs/storage/migrations.py#L1)
+- [backend/alembic.ini](/home/leo/InterviewAgent/backend/alembic.ini)
+- [backend/migrations/env.py](/home/leo/InterviewAgent/backend/migrations/env.py#L1)
+- [backend/migrations/versions/20260228_0001_baseline_schema.py](/home/leo/InterviewAgent/backend/migrations/versions/20260228_0001_baseline_schema.py#L1)
+- [backend/tests/unit/test_migrations.py](/home/leo/InterviewAgent/backend/tests/unit/test_migrations.py#L1)
 
-**风险**
-- 线上 schema 变更不可追踪。
-- 回滚和环境一致性无法保证。
-- 多人协作时容易出现“本地可跑、线上不一致”的情况。
+**当前运行方式**
+- 新环境初始化数据库：`cd backend && uv run alembic upgrade head`
+- 启动应用前先执行迁移，不再依赖应用导入或请求路径自动建表。
 
-**修复目标**
-- schema 变更通过迁移管理，而不是应用启动自动建表。
-- 开发、测试、生产数据库生命周期一致。
-
-**建议方案**
-- 初始化 Alembic。
-- 生成首个基线迁移。
-- 移除运行时 `create_all()` 依赖。
-- 明确应用启动前的迁移执行方式。
-
-**验收标准**
-- 新环境可通过迁移命令完整初始化。
-- 应用启动不再隐式修改数据库 schema。
+**验收结果**
+- 新 PostgreSQL schema 可通过迁移命令完整初始化。
+- 应用实例化本身不再创建任何业务表。
+- 后端回归测试与迁移相关新增测试均已切换为依赖 PostgreSQL 运行。
 
 ---
 
 ### G8. 缺少结构化日志、指标、告警和真实链路观测
+
+**修复状态（2026-03-01）**
+- 已补齐后端 JSON 结构化日志，统一输出 `trace_id`、`event_type`、请求路径、状态码和关键业务字段。
+- 请求入口现在会记录请求完成日志，并为失败请求输出带 `trace_id` 的错误日志。
+- 已新增 `/api/v1/metrics`，暴露 Prometheus 文本指标。
+- `handle_turn` 关键阶段已补 `turn_stage_latency_seconds` 与 `turn_total_latency_seconds` 指标，并在日志中关联 `session_id` / `turn_id`。
+- 已补回归测试，覆盖异常日志 trace_id 关联和 metrics 导出。
 
 **现象**
 - 中间件只生成 `trace_id`，但没有形成完整日志链路。
@@ -484,6 +498,10 @@
 **证据**
 - [backend/apps/api/middleware/trace.py](/home/leo/InterviewAgent/backend/apps/api/middleware/trace.py#L1)
 - [backend/apps/api/main.py](/home/leo/InterviewAgent/backend/apps/api/main.py#L48)
+- [backend/libs/observability.py](/home/leo/InterviewAgent/backend/libs/observability.py#L1)
+- [backend/apps/api/routers/health.py](/home/leo/InterviewAgent/backend/apps/api/routers/health.py#L54)
+- [backend/services/orchestrator/service.py](/home/leo/InterviewAgent/backend/services/orchestrator/service.py#L149)
+- [backend/tests/unit/test_observability.py](/home/leo/InterviewAgent/backend/tests/unit/test_observability.py#L1)
 - [docs/10_observability_event_export.md](/home/leo/InterviewAgent/docs/10_observability_event_export.md#L10)
 
 **风险**
@@ -509,12 +527,17 @@
 - 请求失败时能查到对应 trace_id 的错误日志。
 - 每个 turn 的关键阶段耗时可观测。
 
+**验收结果（2026-03-01）**
+- 失败请求会输出 `unhandled_exception` 结构化错误日志，并保留同一 `trace_id`。
+- `/api/v1/metrics` 可导出请求计数、请求延迟、turn 阶段延迟和 turn 总延迟指标。
+- turn 主链路日志已包含 `session_id`、`turn_id`、`stage`、`latency_ms`。
+
 ---
 
 ### G9. 配置默认值过宽松，生产环境容易误启动
 
 **现象**
-- 默认 `DATABASE_URL` 是本地 SQLite。
+- 默认 `DATABASE_URL` 指向本地 PostgreSQL 开发实例，且运行时会拒绝非 PostgreSQL DSN。
 - 默认 auth secret 仍是 dev 值，生产环境必须覆盖。
 - 默认 LLM provider 是 `stub`。
 - 环境加载器会自动尝试读取多个 `.env` 路径。
@@ -630,7 +653,7 @@ pnpm -s build
 - 前端生产构建：`pnpm -s build` 通过
 
 注意：
-- 前端构建虽然通过，但当前仍会跳过 TypeScript 构建门禁。
+- 前端构建现已恢复 TypeScript 门禁；构建日志会执行 `Running TypeScript ...`。
 - 这些结果只能说明“当前仓库可运行”，不能说明“当前仓库可安全上线”。
 
 ---

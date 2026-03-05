@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from apps.api.core.auth import AuthRole, issue_access_token
+from apps.api.core.candidates import authenticate_candidate
 from apps.api.core.config import settings
 from apps.api.core.response import ok
 
@@ -21,14 +22,17 @@ class TokenIssueRequest(BaseModel):
 @router.post("/auth/token")
 def issue_token(request: Request, body: TokenIssueRequest):
     if body.role == AuthRole.CANDIDATE:
-        candidate_id = (body.candidate_id or "").strip()
-        if not candidate_id:
-            raise HTTPException(status_code=400, detail="candidate_id is required")
+        candidate = authenticate_candidate(body.email, body.password or "")
+        if candidate is None:
+            raise HTTPException(status_code=401, detail="invalid candidate credentials")
+        requested_candidate_id = (body.candidate_id or "").strip()
+        if requested_candidate_id and requested_candidate_id != candidate.candidate_id:
+            raise HTTPException(status_code=403, detail="candidate_id override is forbidden")
         token, expires_in = issue_access_token(
-            subject=body.email.strip().lower() or candidate_id,
+            subject=candidate.email,
             role=AuthRole.CANDIDATE,
-            candidate_id=candidate_id,
-            display_name=(body.display_name or "").strip() or None,
+            candidate_id=candidate.candidate_id,
+            display_name=candidate.display_name,
         )
         return ok(
             request,
@@ -37,8 +41,8 @@ def issue_token(request: Request, body: TokenIssueRequest):
                 "token_type": "bearer",
                 "expires_in": expires_in,
                 "role": body.role.value,
-                "candidate_id": candidate_id,
-                "display_name": (body.display_name or "").strip() or None,
+                "candidate_id": candidate.candidate_id,
+                "display_name": candidate.display_name,
             },
         )
 
