@@ -1,14 +1,31 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from apps.api.core.auth import AuthRole, issue_access_token
+from apps.api.core.dependencies import orchestrator
 from apps.api.main import app
+from libs.schemas.base import NextActionType
+from services.orchestrator.next_action_decider import NextActionDecision
 
 
 def _headers(role: AuthRole, *, subject: str, candidate_id: str | None = None) -> dict[str, str]:
     token, _ = issue_access_token(subject=subject, role=role, candidate_id=candidate_id)
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture(autouse=True)
+def _mock_llm_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        orchestrator.next_action_decider,
+        "decide",
+        lambda *args, **kwargs: NextActionDecision(  # noqa: ARG005
+            action_type=NextActionType.ASK,
+            interviewer_reply="请继续说明你的思路。",
+            reasons=("继续",),
+        ),
+    )
 
 
 def test_admin_session_list_returns_real_backend_sessions() -> None:

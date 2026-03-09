@@ -1,0 +1,29 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments and Python tooling
+.venv/
+venv/
+env/
+.python-version
+uv.lock
+
+# Test and type-checker caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.pyre/
+.tox/
+.nox/
+.coverage
+coverage.xml
+htmlcov/

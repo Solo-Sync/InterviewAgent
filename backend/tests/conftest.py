@@ -4,6 +4,7 @@ import os
 
 import pytest
 
+from services.safety.prompt_injection_detector import PromptInjectionCheck, PromptInjectionDetector
 from tests.support.postgres import (
     DEFAULT_TEST_DATABASE_URL,
     provision_schema,
@@ -29,3 +30,19 @@ def pytest_configure() -> None:
 @pytest.fixture(autouse=True)
 def reset_database() -> None:
     truncate_schema(TEST_DATABASE_SCHEMA)
+
+
+@pytest.fixture(autouse=True)
+def mock_prompt_injection_detector(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+    if request.node.fspath.basename == "test_prompt_injection_detector.py":
+        return
+    monkeypatch.setattr(
+        PromptInjectionDetector,
+        "detect",
+        lambda self, _text: PromptInjectionCheck(  # noqa: ARG005
+            is_prompt_injection=False,
+            confidence=0.0,
+            category="none",
+            reason="normal",
+        ),
+    )

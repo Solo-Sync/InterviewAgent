@@ -21,6 +21,7 @@ from libs.schemas.base import (
     ScaffoldResult,
     Session,
     SessionMode,
+    SessionReviewStatus,
     SessionState,
     Thresholds,
     Trigger,
@@ -215,6 +216,9 @@ class AdminSessionSummary(BaseModel):
     session: Session
     turn_count: int
     report: Report | None = None
+    review_status: SessionReviewStatus
+    prompt_injection_count: int = 0
+    invalid_reason: str | None = None
 
 
 class AdminSessionDetailData(BaseModel):
@@ -222,6 +226,9 @@ class AdminSessionDetailData(BaseModel):
     turns: list[Turn]
     report: Report | None = None
     opening_prompt: str | None = None
+    review_status: SessionReviewStatus
+    prompt_injection_count: int = 0
+    invalid_reason: str | None = None
 
 
 class AdminSessionListData(BaseModel):

@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { BrainCircuit, Clock, Bot, User, Send } from "lucide-react"
-import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -19,13 +18,15 @@ interface CandidateInterviewProps {
   displayName: string | null
 }
 
+const MAX_INTERVIEW_SECONDS = 30 * 60
+
 function formatScoreLabel(score: { plan: number; monitor: number; evaluate: number; adapt: number }) {
   const avg = (score.plan + score.monitor + score.evaluate + score.adapt) / 4
   return `${Math.round(avg * 100)} / 100`
 }
 
 export function CandidateInterview({ onLogout, candidateId, displayName }: CandidateInterviewProps) {
-  const [timeLeft, setTimeLeft] = useState(1800)
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [interviewState, setInterviewState] = useState<InterviewState>("processing")
   const [interviewComplete, setInterviewComplete] = useState(false)
@@ -35,8 +36,6 @@ export function CandidateInterview({ onLogout, candidateId, displayName }: Candi
   const [draftAnswer, setDraftAnswer] = useState("")
   const hasBootstrappedRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
-
-  const progressPercent = interviewComplete ? 100 : Math.min(92, turnCount * 12)
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60)
@@ -48,12 +47,12 @@ export function CandidateInterview({ onLogout, candidateId, displayName }: Candi
     new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 
   useEffect(() => {
-    if (!sessionId || timeLeft <= 0 || interviewComplete) return
+    if (!sessionId || interviewComplete) return
     const interval = setInterval(() => {
-      setTimeLeft((t) => Math.max(0, t - 1))
+      setElapsedSeconds((t) => Math.min(MAX_INTERVIEW_SECONDS, t + 1))
     }, 1000)
     return () => clearInterval(interval)
-  }, [interviewComplete, sessionId, timeLeft])
+  }, [interviewComplete, sessionId])
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -71,12 +70,6 @@ export function CandidateInterview({ onLogout, candidateId, displayName }: Candi
       const payload = await createInterviewSession(candidateId, candidateName)
       setSessionId(payload.session.session_id)
       setMessages([
-        {
-          id: "system-intro",
-          sender: "system",
-          text: "Text mode is enabled. Type each answer below and send it to continue.",
-          timestamp: makeTimestamp(),
-        },
         {
           id: "system-first",
           sender: "system",
@@ -130,27 +123,41 @@ export function CandidateInterview({ onLogout, candidateId, displayName }: Candi
       const payload = await submitInterviewTurn(sessionId, userText)
       const nextTurn = currentTurn + 1
       const shouldComplete = payload.next_action.type === "END"
+      const interviewStatus = String(payload.next_action.payload?.interview_status ?? "")
       setTurnCount(nextTurn)
 
       if (shouldComplete) {
-        let summary = "That concludes your interview. Thank you for your answers."
-        try {
-          const ended = await finishInterviewSession(sessionId, "completed")
-          summary = `Interview completed. Final score: ${formatScoreLabel(ended.report.overall)}.`
-        } catch {
-          // Keep fallback summary when end endpoint fails.
+        setInterviewComplete(true)
+        const systemMessages: ChatMessage[] = []
+        if (payload.next_action.text) {
+          systemMessages.push({
+            id: `system-${nextTurn}`,
+            sender: "system",
+            text: payload.next_action.text,
+            timestamp: makeTimestamp(),
+          })
         }
 
-        setInterviewComplete(true)
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `complete-${nextTurn}`,
-            sender: "system",
-            text: summary,
-            timestamp: makeTimestamp(),
-          },
-        ])
+        let summary =
+          interviewStatus === "invalid"
+            ? "Interview ended and was marked Invalid."
+            : "That concludes your interview. Thank you for your answers."
+        if (interviewStatus !== "invalid") {
+          try {
+            const ended = await finishInterviewSession(sessionId, "completed")
+            summary = `Interview completed. Final score: ${formatScoreLabel(ended.report.overall)}.`
+          } catch {
+            // Keep fallback summary when end endpoint fails.
+          }
+        }
+
+        systemMessages.push({
+          id: `complete-${nextTurn}`,
+          sender: "system",
+          text: summary,
+          timestamp: makeTimestamp(),
+        })
+        setMessages((prev) => [...prev, ...systemMessages])
       } else {
         setMessages((prev) => [
           ...prev,
@@ -191,22 +198,12 @@ export function CandidateInterview({ onLogout, candidateId, displayName }: Candi
           </div>
           <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
             <Clock className="h-4 w-4" />
+            <span className="text-xs">已进行</span>
             <span className="font-mono text-sm font-medium tabular-nums">
-              {formatTime(timeLeft)}
+              {formatTime(elapsedSeconds)}
             </span>
+            <span className="text-xs">超过30分钟自动结束面试</span>
           </div>
-        </div>
-
-        <div className="mx-auto max-w-3xl px-4 pb-3">
-          <div className="flex items-center justify-between pb-1.5">
-            <span className="text-xs font-semibold text-foreground">
-              {interviewComplete
-                ? "Interview Complete"
-                : `Round ${turnCount + 1}`}
-            </span>
-            <span className="text-xs text-muted-foreground">{Math.round(progressPercent)}%</span>
-          </div>
-          <Progress value={progressPercent} className="h-1.5" />
         </div>
       </header>
 

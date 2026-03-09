@@ -18,7 +18,6 @@ class NextActionType(str, Enum):
     ASK = "ASK"
     PROBE = "PROBE"
     SCAFFOLD = "SCAFFOLD"
-    CALM = "CALM"
     END = "END"
     WAIT = "WAIT"
 
@@ -66,6 +65,12 @@ class SafetyAction(str, Enum):
 class SessionMode(str, Enum):
     TEXT = "text"
     AUDIO = "audio"
+
+
+class SessionReviewStatus(str, Enum):
+    IN_PROGRESS = "in-progress"
+    COMPLETED = "completed"
+    INVALID = "invalid"
 
 
 class ErrorCode(str, Enum):
@@ -244,7 +249,34 @@ class ReportPoint(BaseModel):
     scores: DimScores
 
 
+class ReportDialogueMessage(BaseModel):
+    speaker: str
+    turn_index: int | None = None
+    text: str
+    kind: str | None = None
+
+
+class ReportTurnEvaluation(BaseModel):
+    turn_id: str
+    turn_index: int
+    question: str | None = None
+    answer: str | None = None
+    scores: DimScores | None = None
+    final_confidence: float | None = None
+    judge_votes: list[JudgeVote] | None = None
+    evidence: list[EvidenceSpan] | None = None
+
+
+class ReportLLMScoring(BaseModel):
+    source: str
+    confidence: float | None = None
+    overall: DimScores
+    turns: list[ReportTurnEvaluation] = Field(default_factory=list)
+
+
 class Report(BaseModel):
     overall: DimScores
     timeline: list[ReportPoint]
+    conversation: list[ReportDialogueMessage] = Field(default_factory=list)
+    llm_scoring: ReportLLMScoring | None = None
     notes: list[str] | None = None

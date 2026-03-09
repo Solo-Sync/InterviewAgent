@@ -6,11 +6,15 @@ import hmac
 import json
 from time import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from apps.api.core.auth import AuthRole, issue_access_token
 from apps.api.core.config import settings
+from apps.api.core.dependencies import orchestrator
 from apps.api.main import app
+from libs.schemas.base import NextActionType
+from services.orchestrator.next_action_decider import NextActionDecision
 
 
 def _headers(role: AuthRole, *, subject: str, candidate_id: str | None = None) -> dict[str, str]:
@@ -33,6 +37,19 @@ def _encode(payload: dict[str, object]) -> str:
         hmac.new(settings.auth_token_secret.encode("utf-8"), signed, hashlib.sha256).digest()
     ).rstrip(b"=").decode("ascii")
     return f"{header_part}.{payload_part}.{signature}"
+
+
+@pytest.fixture(autouse=True)
+def _mock_next_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        orchestrator.next_action_decider,
+        "decide",
+        lambda *args, **kwargs: NextActionDecision(  # noqa: ARG005
+            action_type=NextActionType.ASK,
+            interviewer_reply="请继续说明你的思路。",
+            reasons=("继续",),
+        ),
+    )
 
 
 def test_candidate_cannot_access_admin_route() -> None:

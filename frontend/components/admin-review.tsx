@@ -114,6 +114,9 @@ export function AdminReview({ sessionSummary, onBack }: AdminReviewProps) {
 
   const transcript = useMemo(() => (detail ? buildTranscript(detail) : []), [detail])
   const report = detail?.report ?? sessionSummary.report
+  const reviewStatus = detail?.review_status ?? sessionSummary.review_status
+  const promptInjectionCount = detail?.prompt_injection_count ?? sessionSummary.prompt_injection_count
+  const invalidReason = detail?.invalid_reason ?? sessionSummary.invalid_reason
   const candidateName = sessionLabel(sessionSummary)
   const candidateId = sessionSummary.session.candidate?.candidate_id ?? "unknown"
   const createdAt = new Date(sessionSummary.session.created_at).toLocaleString()
@@ -138,12 +141,14 @@ export function AdminReview({ sessionSummary, onBack }: AdminReviewProps) {
           <Badge
             variant="outline"
             className={
-              report
+              reviewStatus === "invalid"
+                ? "border-rose-200 bg-rose-50 text-rose-700"
+                : report
                 ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                 : "border-amber-200 bg-amber-50 text-amber-700"
             }
           >
-            {report ? "Completed" : "In Progress"}
+            {reviewStatus === "invalid" ? "Invalid" : report ? "Completed" : "In Progress"}
           </Badge>
         </div>
       </header>
@@ -229,7 +234,15 @@ export function AdminReview({ sessionSummary, onBack }: AdminReviewProps) {
               </div>
             </div>
 
-            {report ? (
+            {reviewStatus === "invalid" ? (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+                <p className="font-medium">This interview was marked Invalid.</p>
+                <p className="mt-1">
+                  Prompt injection detections: {promptInjectionCount}
+                  {invalidReason ? ` | Reason: ${invalidReason}` : ""}
+                </p>
+              </div>
+            ) : report ? (
               <>
                 <div className="rounded-lg border border-border bg-card p-4">
                   <div className="flex items-center justify-between">

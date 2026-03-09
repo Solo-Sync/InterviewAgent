@@ -109,15 +109,18 @@ def list_sessions(
 ):
     items = []
     for session in orchestrator.list_sessions():
+        report = orchestrator.get_report(session.session_id)
+        review_status, prompt_injection_count, invalid_reason = orchestrator.get_session_review_status(
+            session.session_id
+        )
         items.append(
             {
                 "session": session.model_dump(),
                 "turn_count": orchestrator.count_turns(session.session_id),
-                "report": (
-                    report.model_dump()
-                    if (report := orchestrator.get_report(session.session_id)) is not None
-                    else None
-                ),
+                "report": report.model_dump() if report is not None else None,
+                "review_status": review_status.value,
+                "prompt_injection_count": prompt_injection_count,
+                "invalid_reason": invalid_reason,
             }
         )
     return ok(request, {"items": items})
@@ -136,6 +139,7 @@ def get_session_detail(
 
     turns, _ = orchestrator.list_turns(session_id, limit=200, cursor=None)
     report = orchestrator.get_report(session_id)
+    review_status, prompt_injection_count, invalid_reason = orchestrator.get_session_review_status(session_id)
     return ok(
         request,
         {
@@ -143,5 +147,8 @@ def get_session_detail(
             "turns": [turn.model_dump() for turn in turns],
             "report": report.model_dump() if report is not None else None,
             "opening_prompt": orchestrator.get_opening_prompt(session.question_set_id),
+            "review_status": review_status.value,
+            "prompt_injection_count": prompt_injection_count,
+            "invalid_reason": invalid_reason,
         },
     )

@@ -2,10 +2,12 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
+import pytest
 from apps.api.core.dependencies import orchestrator
 from libs.schemas.api import SessionCreateRequest, TurnCreateRequest
-from libs.schemas.base import Candidate, ClientMeta, SessionMode, TurnInput, TurnInputType
+from libs.schemas.base import Candidate, ClientMeta, NextActionType, SessionMode, TurnInput, TurnInputType
 from libs.storage.postgres import SqlStore
+from services.orchestrator.next_action_decider import NextActionDecision
 
 
 def _build_orchestrators():
@@ -15,6 +17,19 @@ def _build_orchestrators():
     primary.store = SqlStore(database_url)
     secondary.store = SqlStore(database_url)
     return primary, secondary
+
+
+@pytest.fixture(autouse=True)
+def _mock_next_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        type(orchestrator.next_action_decider),
+        "decide",
+        lambda self, *args, **kwargs: NextActionDecision(  # noqa: ARG005
+            action_type=NextActionType.ASK,
+            interviewer_reply="请继续说明你的思路。",
+            reasons=("继续",),
+        ),
+    )
 
 
 def _create_session(service, candidate_id: str):

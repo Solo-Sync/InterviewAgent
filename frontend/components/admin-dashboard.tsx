@@ -39,10 +39,7 @@ interface AdminDashboardProps {
 }
 
 function sessionStatus(item: AdminSessionSummary): Exclude<CandidateStatus, "pending"> {
-  if (item.report || item.session.state === "S_END") {
-    return "completed"
-  }
-  return "in-progress"
+  return item.review_status
 }
 
 function sessionLabel(item: AdminSessionSummary) {
@@ -68,6 +65,10 @@ function StatusBadge({ status }: { status: Exclude<CandidateStatus, "pending"> }
     completed: {
       label: "Completed",
       className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    },
+    invalid: {
+      label: "Invalid",
+      className: "border-rose-200 bg-rose-50 text-rose-700",
     },
     "in-progress": {
       label: "In Progress",
@@ -165,6 +166,7 @@ export function AdminDashboard({ onReviewSession, onLogout }: AdminDashboardProp
     total: sessions.length,
     completed: sessions.filter((item) => sessionStatus(item) === "completed").length,
     inProgress: sessions.filter((item) => sessionStatus(item) === "in-progress").length,
+    invalid: sessions.filter((item) => sessionStatus(item) === "invalid").length,
   }
 
   return (
@@ -241,7 +243,7 @@ export function AdminDashboard({ onReviewSession, onLogout }: AdminDashboardProp
             <div>
               <p className="text-2xl font-bold text-foreground">{stats.inProgress}</p>
               <p className="text-sm text-muted-foreground">
-                Active | QSets {metaCounts.questionSets} | Rubrics {metaCounts.rubrics}
+                Active | Invalid {stats.invalid} | QSets {metaCounts.questionSets} | Rubrics {metaCounts.rubrics}
               </p>
             </div>
           </div>
@@ -269,6 +271,7 @@ export function AdminDashboard({ onReviewSession, onLogout }: AdminDashboardProp
                 <DropdownMenuItem onClick={() => setFilterStatus("all")}>All Status</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setFilterStatus("completed")}>Completed</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setFilterStatus("in-progress")}>In Progress</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setFilterStatus("invalid")}>Invalid</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -344,7 +347,9 @@ export function AdminDashboard({ onReviewSession, onLogout }: AdminDashboardProp
                         <StatusBadge status={status} />
                       </TableCell>
                       <TableCell>
-                        {score !== null ? (
+                        {status === "invalid" ? (
+                          <span className="font-semibold text-rose-700">Invalid</span>
+                        ) : score !== null ? (
                           <span className="font-semibold text-foreground">{score}/100</span>
                         ) : (
                           <span className="text-muted-foreground">In progress</span>

@@ -296,17 +296,24 @@ class SqlStore:
             return
         db.execute(events_table.insert(), events)
 
-    def list_events(self, session_id: str) -> list[dict[str, Any]]:
-        with Session(self.engine) as db:
-            rows = (
-                db.execute(
-                    select(events_table)
-                    .where(events_table.c.session_id == session_id)
-                    .order_by(events_table.c.created_at.asc())
-                )
-                .mappings()
-                .all()
+    def count_events_tx(self, db: Session, session_id: str, event_type: str) -> int:
+        count = db.execute(
+            select(func.count())
+            .select_from(events_table)
+            .where(events_table.c.session_id == session_id, events_table.c.event_type == event_type)
+        ).scalar_one()
+        return int(count)
+
+    def list_events_tx(self, db: Session, session_id: str) -> list[dict[str, Any]]:
+        rows = (
+            db.execute(
+                select(events_table)
+                .where(events_table.c.session_id == session_id)
+                .order_by(events_table.c.created_at.asc())
             )
+            .mappings()
+            .all()
+        )
         return [
             {
                 "event_id": row["event_id"],
@@ -318,6 +325,10 @@ class SqlStore:
             }
             for row in rows
         ]
+
+    def list_events(self, session_id: str) -> list[dict[str, Any]]:
+        with Session(self.engine) as db:
+            return self.list_events_tx(db, session_id)
 
     def upsert_report(self, db: Session, session_id: str, report: Report) -> None:
         now = datetime.now(timezone.utc)

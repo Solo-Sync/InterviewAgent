@@ -7,7 +7,7 @@ export interface AuthSession {
   displayName: string | null
 }
 
-export type CandidateStatus = "pending" | "in-progress" | "completed"
+export type CandidateStatus = "pending" | "in-progress" | "completed" | "invalid"
 
 export interface ScoreDimensions {
   plan: number
@@ -80,6 +80,9 @@ export interface AdminSessionSummary {
   session: InterviewSessionRecord
   turn_count: number
   report: SessionReport | null
+  review_status: Exclude<CandidateStatus, "pending">
+  prompt_injection_count: number
+  invalid_reason: string | null
 }
 
 export interface AdminSessionDetail {
@@ -87,6 +90,9 @@ export interface AdminSessionDetail {
   turns: InterviewTurnRecord[]
   report: SessionReport | null
   opening_prompt: string | null
+  review_status: Exclude<CandidateStatus, "pending">
+  prompt_injection_count: number
+  invalid_reason: string | null
 }
 
 export type InterviewState = "idle" | "recording" | "processing"

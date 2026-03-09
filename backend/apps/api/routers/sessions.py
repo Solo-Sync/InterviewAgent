@@ -16,7 +16,9 @@ from libs.schemas.api import (
     SessionEndRequest,
     TurnCreateRequest,
 )
+from services.orchestrator.next_action_decider import NextActionDecisionError
 from services.orchestrator.service import CursorError, OrchestratorService
+from services.safety.prompt_injection_detector import PromptInjectionDetectionError
 
 router = APIRouter(tags=["sessions"])
 
@@ -89,6 +91,22 @@ def create_turn(
         raise HTTPException(status_code=404, detail="session not found") from None
     except RuntimeError:
         raise HTTPException(status_code=409, detail="session already ended") from None
+    except NextActionDecisionError as exc:
+        return err_response(
+            request,
+            status_code=502,
+            code=ErrorCode.INTERNAL.value,
+            message="next action llm decision failed",
+            detail={"type": exc.__class__.__name__, "reason": str(exc)},
+        )
+    except PromptInjectionDetectionError as exc:
+        return err_response(
+            request,
+            status_code=502,
+            code=ErrorCode.INTERNAL.value,
+            message="prompt injection detection failed",
+            detail={"type": exc.__class__.__name__, "reason": str(exc)},
+        )
     except ValueError as exc:
         return err_response(
             request,
@@ -148,7 +166,10 @@ def end_session(
     principal: AuthPrincipal = Depends(require_roles(AuthRole.CANDIDATE)),
 ):
     _require_owned_session(session_id, orchestrator=orchestrator, principal=principal)
-    report = orchestrator.end_session(session_id, body.reason.value)
+    try:
+        report = orchestrator.end_session(session_id, body.reason.value)
+    except RuntimeError:
+        raise HTTPException(status_code=409, detail="session already ended") from None
     return ok(request, {"report": report.model_dump()})
 
 

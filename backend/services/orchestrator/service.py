@@ -17,15 +17,19 @@ from libs.observability import log_event, observe_turn_stage, observe_turn_total
 from libs.schemas.api import CursorEnvelope, HumanAnnotationCreateRequest, SessionCreateRequest, TurnCreateRequest
 from libs.schemas.base import (
     AsrResult,
-    DimScores,
     NextAction,
     NextActionType,
     PreprocessResult,
     QuestionCursor,
     QuestionRef,
     Report,
+    ReportDialogueMessage,
+    ReportLLMScoring,
     ReportPoint,
+    ReportTurnEvaluation,
+    ScaffoldResult,
     Session,
+    SessionReviewStatus,
     SessionState,
     Turn,
     TurnInputType,
@@ -34,17 +38,27 @@ from libs.storage.files import FileStore
 from libs.storage.postgres import SqlStore
 from sqlalchemy.exc import IntegrityError
 from services.asr import ASRService
-from services.evaluation.aggregator import ScoreAggregator
+from services.dialogue.generator import DialogueGenerator
 from services.evaluation.session_scorer import SessionScorer
 from services.nlp.preprocess import Preprocessor
-from services.orchestrator.policy import OrchestratorPolicy
+from services.orchestrator.next_action_decider import LLMNextActionDecider
 from services.orchestrator.selector import QuestionSelector
 from services.orchestrator.state_machine import SessionStateMachine
 from services.safety.classifier import SafetyClassifier
+from services.safety.prompt_injection_detector import PromptInjectionDetectionError, PromptInjectionDetector
 from services.scaffold.generator import ScaffoldGenerator
 from services.trigger.detector import TriggerDetector
 
 logger = logging.getLogger(__name__)
+
+_LAST_QUESTION_NOTICE_TEXT = "这场面试时间已经过长，这次将是你的最后一次提问"
+_LAST_QUESTION_NOTICE_MARKER = "__last_question_notice_issued__"
+_MAX_TURNS_PER_QUESTION = 12
+_QUESTION_TURN_LIMIT_END_TEXT = "这道题先到这里，感谢你的作答。"
+_PROMPT_INJECTION_WARNING_TEXT = "你进行了一次提示词注入，请不要再这样做，否则会直接停止面试"
+_PROMPT_INJECTION_END_TEXT = "你再次进行了提示词注入，面试已终止，本次面试将被标记为 Invalid"
+_PROMPT_INJECTION_LIMIT = 2
+_PROMPT_INJECTION_REDACTED_TEXT = "[prompt injection removed]"
 
 
 class CursorError(ValueError):
@@ -54,23 +68,34 @@ class CursorError(ValueError):
 class OrchestratorService:
     def __init__(self) -> None:
         self.state_machine = SessionStateMachine()
-        self.policy = OrchestratorPolicy()
+        self.next_action_decider = LLMNextActionDecider()
         self.selector = QuestionSelector()
         self.preprocessor = Preprocessor()
         self.safety = SafetyClassifier()
+        self.prompt_injection_detector = PromptInjectionDetector()
         self.trigger_detector = TriggerDetector()
         self.scaffold = ScaffoldGenerator()
-        self.scoring = ScoreAggregator(judge_mode="turn_aux")
+        self.dialogue = DialogueGenerator()
         self.session_scoring = SessionScorer()
         self.asr_service = ASRService()
         self.file_store = FileStore()
         self.store = SqlStore(settings.database_url)
         self.question_set_dir = Path(__file__).resolve().parents[2] / "data" / "question_sets"
         self.rubric_dir = Path(__file__).resolve().parents[2] / "data" / "rubrics"
+        self.scaffold_policy_ids = {item.strip().lower() for item in settings.scaffold_policy_ids if item.strip()}
 
     def create_session(self, req: SessionCreateRequest) -> tuple[Session, NextAction]:
-        self._ensure_session_refs_exist(req.question_set_id, req.scoring_policy_id)
+        self._ensure_session_refs_exist(
+            req.question_set_id,
+            req.scoring_policy_id,
+            req.scaffold_policy_id,
+        )
         opening = self.selector.opening_selection(req.question_set_id)
+        opening_seed_text = opening.question.text if opening.question else None
+        opening_text = self._build_opening_prompt(opening_seed_text)
+        opening_cursor = (
+            opening.cursor.model_copy(update={"prompt_text": opening_text}) if opening.cursor else None
+        )
         session = Session(
             session_id=f"sess_{uuid4().hex[:12]}",
             candidate=req.candidate,
@@ -80,12 +105,12 @@ class OrchestratorService:
             scoring_policy_id=req.scoring_policy_id,
             scaffold_policy_id=req.scaffold_policy_id,
             thresholds=req.thresholds,
-            current_question_cursor=opening.cursor,
+            current_question_cursor=opening_cursor,
             created_at=datetime.now(timezone.utc),
         )
         next_action = NextAction(
             type=opening.action_type,
-            text=opening.question.text if opening.question else None,
+            text=opening_text,
             level=None,
             payload=None,
         )
@@ -205,6 +230,45 @@ class OrchestratorService:
                 asr=asr_result.model_dump(mode="json") if asr_result else None,
             )
 
+            prompt_injection_started = perf_counter()
+            prompt_injection = self.prompt_injection_detector.detect(raw_text)
+            self._record_turn_stage(
+                "prompt_injection",
+                prompt_injection_started,
+                session_id=session_id,
+                turn_id=turn_id,
+            )
+            log_event(
+                logger,
+                logging.INFO,
+                "turn_prompt_injection_evaluated",
+                session_id=session_id,
+                turn_id=turn_id,
+                raw_text=raw_text,
+                is_prompt_injection=prompt_injection.is_prompt_injection,
+                prompt_injection_category=prompt_injection.category,
+                prompt_injection_confidence=prompt_injection.confidence,
+                prompt_injection_reason=prompt_injection.reason,
+            )
+            if prompt_injection.is_prompt_injection:
+                return self._handle_prompt_injection_turn(
+                    db,
+                    session=session,
+                    req=req,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    turn_index=turn_index,
+                    before=before,
+                    current_question=current_question,
+                    current_cursor=current_cursor,
+                    asr_result=asr_result,
+                    raw_text=raw_text,
+                    events=events,
+                    idempotency_key=idempotency_key,
+                    turn_started=turn_started,
+                    prompt_injection=prompt_injection,
+                )
+
             preprocess_started = perf_counter()
             preprocess = PreprocessResult(**self.preprocessor.run(raw_text))
             self._record_turn_stage("preprocess", preprocess_started, session_id=session_id, turn_id=turn_id)
@@ -254,7 +318,13 @@ class OrchestratorService:
                     state=after.value,
                     last_next_action=next_action,
                     current_question_cursor=None,
+                    theta=None,
                     ended_at=datetime.now(timezone.utc),
+                )
+                _, session_score = self._generate_report_for_session(
+                    db,
+                    session_id,
+                    reason="safety_block",
                 )
                 events.extend(
                     [
@@ -272,6 +342,16 @@ class OrchestratorService:
                             turn.turn_id,
                             "next_action_decided",
                             next_action.model_dump(mode="json"),
+                        ),
+                        self._event(
+                            session_id,
+                            turn.turn_id,
+                            "report_generated",
+                            {
+                                "reason": "safety_block",
+                                "session_score_source": session_score.source,
+                                "session_score_confidence": session_score.confidence,
+                            },
                         ),
                     ]
                 )
@@ -303,6 +383,7 @@ class OrchestratorService:
 
             clean_text = safety["sanitized_text"] or preprocess.clean_text
             if safety["action"] == "SANITIZE":
+                preprocess = preprocess.model_copy(update={"clean_text": clean_text})
                 events.append(
                     self._event(
                         session_id,
@@ -329,6 +410,7 @@ class OrchestratorService:
             trigger_started = perf_counter()
             triggers = self.trigger_detector.detect(
                 clean_text,
+                question_text=current_question.text if current_question else None,
                 recent_texts=recent_texts,
                 silence_s=silence_s,
                 silence_threshold_s=silence_threshold,
@@ -358,12 +440,90 @@ class OrchestratorService:
                 triggers=[trigger.model_dump(mode="json") for trigger in triggers],
             )
 
-            scaffold_started = perf_counter()
             trigger_types = {trigger.type for trigger in triggers}
-            action_type, scaffold_level = self.policy.choose_action(trigger_types)
-            scaffold = self.scaffold.generate(scaffold_level, {"text": clean_text}) if scaffold_level else None
-            self._record_turn_stage("scaffold", scaffold_started, session_id=session_id, turn_id=turn_id)
-            if scaffold and scaffold.fired:
+
+            policy_started = perf_counter()
+            conversation_history = self._build_full_conversation_history(
+                db,
+                session_id,
+                current_question=current_question,
+                candidate_answer=clean_text,
+                turn_index=turn_index,
+            )
+            elapsed_minutes = self._elapsed_minutes(session.created_at)
+            last_question_notice_issued = self._last_question_notice_issued(current_cursor)
+            next_cursor: QuestionCursor | None
+            decision_source = "llm_policy"
+            decision_reasons: dict[str, object]
+            scaffold: ScaffoldResult | None = None
+            llm_decision = self.next_action_decider.decide(
+                conversation_history,
+                elapsed_minutes=elapsed_minutes,
+                last_question_notice_issued=last_question_notice_issued,
+            )
+            next_action = NextAction(
+                type=llm_decision.action_type,
+                text=llm_decision.interviewer_reply,
+                level=None,
+                payload=None,
+            )
+            time_policy_applied: str | None = None
+            question_policy_applied: str | None = None
+            if self._question_turn_limit_reached(current_cursor):
+                next_action = NextAction(type=NextActionType.END, text=_QUESTION_TURN_LIMIT_END_TEXT)
+                question_policy_applied = "force_end_after_question_turn_limit"
+            if elapsed_minutes >= 30.0 or last_question_notice_issued:
+                next_action = NextAction(type=NextActionType.END, text="本场面试到此结束，感谢你的作答。")
+                time_policy_applied = "force_end_after_time_limit"
+            issue_last_question_notice = False
+            if (
+                question_policy_applied is None
+                and 25.0 <= elapsed_minutes < 30.0
+                and not last_question_notice_issued
+            ):
+                if next_action.type not in {NextActionType.ASK, NextActionType.PROBE}:
+                    next_action = next_action.model_copy(update={"type": NextActionType.PROBE, "level": None})
+                    time_policy_applied = "last_question_coerced_to_probe"
+                next_action = next_action.model_copy(update={"text": self._with_last_question_notice(next_action.text)})
+                issue_last_question_notice = True
+                if time_policy_applied is None:
+                    time_policy_applied = "issue_last_question_notice"
+            if next_action.type == NextActionType.SCAFFOLD:
+                scaffold = ScaffoldResult(
+                    fired=True,
+                    level=None,
+                    prompt=next_action.text,
+                    rationale="llm_selected_scaffold",
+                )
+            next_cursor = None
+            if next_action.type != NextActionType.END:
+                next_cursor = self._cursor_for_next_action(
+                    current_cursor,
+                    action_type=next_action.type,
+                    prompt=next_action.text or "",
+                    turn_index=turn_index + 1,
+                    issue_last_question_notice=issue_last_question_notice,
+                )
+            decision_reasons = {
+                "action_type": llm_decision.action_type.value,
+                "llm_reasons": list(llm_decision.reasons),
+                "history_message_count": len(conversation_history),
+                "trigger_types": sorted(trigger_type.value for trigger_type in trigger_types),
+                "elapsed_minutes": round(elapsed_minutes, 2),
+                "last_question_notice_issued": last_question_notice_issued,
+                "question_policy_applied": question_policy_applied,
+                "time_policy_applied": time_policy_applied,
+            }
+
+            self._record_turn_stage("policy_llm", policy_started, session_id=session_id, turn_id=turn_id)
+            if next_action.type == NextActionType.SCAFFOLD:
+                if scaffold is None:
+                    scaffold = ScaffoldResult(
+                        fired=True,
+                        level=None,
+                        prompt=next_action.text,
+                        rationale="llm_selected_scaffold",
+                    )
                 events.append(
                     self._event(
                         session_id,
@@ -379,101 +539,10 @@ class OrchestratorService:
                 session_id=session_id,
                 turn_id=turn_id,
                 trigger_types=sorted(trigger_type.value for trigger_type in trigger_types),
-                chosen_action_type=action_type.value,
-                scaffold_level=scaffold_level.value if scaffold_level else None,
-                scaffold=scaffold.model_dump(mode="json") if scaffold else None,
+                chosen_action_type=next_action.type.value,
+                decision_source=decision_source,
+                decision_reasons=decision_reasons,
             )
-
-            evaluation_started = perf_counter()
-            eval_result = self.scoring.score(
-                clean_text,
-                question=current_question.text if current_question and current_question.text else "",
-                scaffold_level=scaffold_level,
-            )
-            self._record_turn_stage("evaluation", evaluation_started, session_id=session_id, turn_id=turn_id)
-            theta = self._update_theta(session.theta, eval_result.scores)
-            log_event(
-                logger,
-                logging.INFO,
-                "turn_evaluation_ready",
-                session_id=session_id,
-                turn_id=turn_id,
-                evaluation=eval_result.model_dump(mode="json"),
-                theta_previous=session.theta.model_dump(mode="json") if session.theta else None,
-                theta_updated=theta.model_dump(mode="json"),
-            )
-
-            next_cursor: QuestionCursor | None
-            decision_source = "selector"
-            decision_reasons: dict[str, object] = {}
-            if scaffold and scaffold.fired and scaffold.prompt:
-                next_action = NextAction(
-                    type=action_type,
-                    text=scaffold.prompt,
-                    level=scaffold_level,
-                    payload=None,
-                )
-                next_cursor = self.selector.scaffold_cursor(
-                    current_cursor,
-                    prompt=scaffold.prompt,
-                    level=scaffold.level.value if scaffold.level else "L1",
-                    turn_index=turn_index + 1,
-                )
-                decision_source = "scaffold_prompt"
-                decision_reasons = {
-                    "action_type": action_type.value,
-                    "scaffold_level": scaffold_level.value if scaffold_level else None,
-                    "scaffold_rationale": scaffold.rationale,
-                }
-            elif action_type == NextActionType.CALM:
-                calm_prompt = "慢一点也没关系。先说你准备从哪一步开始。"
-                next_action = NextAction(type=action_type, text=calm_prompt, level=None, payload=None)
-                next_cursor = self.selector.scaffold_cursor(
-                    current_cursor,
-                    prompt=calm_prompt,
-                    level="CALM",
-                    turn_index=turn_index + 1,
-                )
-                decision_source = "calm_action"
-                decision_reasons = {
-                    "action_type": action_type.value,
-                    "trigger_types": sorted(trigger_type.value for trigger_type in trigger_types),
-                    "calm_prompt": calm_prompt,
-                }
-            else:
-                selection = self.selector.select_next(
-                    session.question_set_id,
-                    current_cursor,
-                    eval_result,
-                    theta,
-                )
-                if selection.exhausted:
-                    next_action = NextAction(
-                        type=NextActionType.END,
-                        text="本轮面试到此结束，感谢你的回答。",
-                        level=None,
-                        payload=None,
-                    )
-                    next_cursor = None
-                else:
-                    next_action = NextAction(
-                        type=selection.action_type,
-                        text=selection.question.text if selection.question else None,
-                        level=None,
-                        payload=None,
-                    )
-                    next_cursor = selection.cursor
-                decision_reasons = {
-                    "action_type": selection.action_type.value,
-                    "selection_exhausted": selection.exhausted,
-                    "selection_prompt_kind": selection.cursor.prompt_kind if selection.cursor else None,
-                    "selection_prompt_id": selection.cursor.prompt_id if selection.cursor else None,
-                    "selection_node_id": selection.cursor.node_id if selection.cursor else None,
-                    "selection_question_text": selection.question.text if selection.question else None,
-                    "evaluation_scores": eval_result.scores.model_dump(mode="json"),
-                    "evaluation_confidence": eval_result.final_confidence,
-                    "theta_updated": theta.model_dump(mode="json"),
-                }
             after = self.state_machine.next_state(before, next_action.type)
             log_event(
                 logger,
@@ -499,7 +568,7 @@ class OrchestratorService:
                 asr=asr_result,
                 preprocess=preprocess,
                 triggers=triggers or None,
-                evaluation=eval_result,
+                evaluation=None,
                 next_action=next_action,
                 scaffold=scaffold,
             )
@@ -510,16 +579,36 @@ class OrchestratorService:
                 state=after.value,
                 last_next_action=next_action,
                 current_question_cursor=next_cursor.model_dump(mode="json") if next_cursor else None,
-                theta=theta.model_dump(mode="json"),
+                theta=None,
                 ended_at=datetime.now(timezone.utc) if next_action.type == NextActionType.END else None,
             )
+            report_event = None
+            if next_action.type == NextActionType.END:
+                _, session_score = self._generate_report_for_session(
+                    db,
+                    session_id,
+                    reason="auto_end",
+                )
+                report_event = self._event(
+                    session_id,
+                    turn.turn_id,
+                    "report_generated",
+                    {
+                        "reason": "auto_end",
+                        "session_score_source": session_score.source,
+                        "session_score_confidence": session_score.confidence,
+                    },
+                )
             events.extend(
                 [
                     self._event(
                         session_id,
                         turn.turn_id,
                         "evaluation_completed",
-                        eval_result.model_dump(mode="json"),
+                        {
+                            "skipped": True,
+                            "reason": "turn_scoring_disabled",
+                        },
                     ),
                     self._event(
                         session_id,
@@ -529,6 +618,8 @@ class OrchestratorService:
                     ),
                 ]
             )
+            if report_event is not None:
+                events.append(report_event)
             self.store.append_events(db, events)
             self._record_turn_total(
                 turn_started,
@@ -556,20 +647,14 @@ class OrchestratorService:
             session = self.store.get_session_for_update(db, session_id)
             if session is None:
                 raise KeyError("session not found")
+            if self.store.count_events_tx(db, session_id, "session_invalidated") > 0:
+                raise RuntimeError("session invalidated")
 
-            turns = self.store.list_turns_tx(db, session_id)
-            session_score = self.session_scoring.score_session(turns)
-            latest = session_score.scores
-            timeline = [
-                ReportPoint(
-                    turn_index=t.turn_index,
-                    scores=t.evaluation.scores if t.evaluation else latest,
-                )
-                for t in turns
-            ]
-            report_notes = [f"ended:{reason}", *session_score.notes]
-            report = Report(overall=latest, timeline=timeline, notes=report_notes)
-            self.store.upsert_report(db, session_id, report)
+            report, session_score = self._generate_report_for_session(
+                db,
+                session_id,
+                reason=reason,
+            )
             end_action = NextAction(type=NextActionType.END, text="Session closed.")
             self.store.update_session(
                 db,
@@ -590,15 +675,23 @@ class OrchestratorService:
                 reason=reason,
                 session_score_source=session_score.source,
                 session_score_confidence=session_score.confidence,
-                session_score=latest.model_dump(mode="json"),
+                session_score=report.overall.model_dump(mode="json"),
             )
             return report
 
     def get_report(self, session_id: str) -> Report | None:
         return self.store.get_report(session_id)
 
+    def get_session_review_status(self, session_id: str) -> tuple[SessionReviewStatus, int, str | None]:
+        session = self.get_session(session_id)
+        if session is None:
+            raise KeyError("session not found")
+        report = self.get_report(session_id)
+        return self._derive_session_review_status(session, report=report)
+
     def get_opening_prompt(self, question_set_id: str) -> str | None:
         prompt = self.selector.next_prompt(question_set_id, 0)
+        prompt = self._build_opening_prompt(prompt)
         return prompt or None
 
     def export_events(self, session_id: str) -> str:
@@ -641,6 +734,173 @@ class OrchestratorService:
                 turn_id=body.turn_id,
             )
 
+    def _handle_prompt_injection_turn(
+        self,
+        db,
+        *,
+        session: Session,
+        req: TurnCreateRequest,
+        session_id: str,
+        turn_id: str,
+        turn_index: int,
+        before: SessionState,
+        current_question: QuestionRef | None,
+        current_cursor: QuestionCursor | None,
+        asr_result: AsrResult | None,
+        raw_text: str,
+        events: list[dict],
+        idempotency_key: str | None,
+        turn_started: float,
+        prompt_injection,
+    ) -> tuple[Turn, NextAction]:
+        preprocess_started = perf_counter()
+        preprocess = PreprocessResult(**self.preprocessor.run(raw_text))
+        preprocess = preprocess.model_copy(update={"clean_text": _PROMPT_INJECTION_REDACTED_TEXT})
+        self._record_turn_stage("preprocess", preprocess_started, session_id=session_id, turn_id=turn_id)
+        events.append(
+            self._event(
+                session_id,
+                None,
+                "preprocess_completed",
+                preprocess.model_dump(mode="json"),
+            )
+        )
+
+        prompt_injection_count = self.store.count_events_tx(db, session_id, "prompt_injection_detected") + 1
+        events.append(
+            self._event(
+                session_id,
+                turn_id,
+                "prompt_injection_detected",
+                {
+                    "count": prompt_injection_count,
+                    "category": prompt_injection.category,
+                    "confidence": prompt_injection.confidence,
+                    "reason": prompt_injection.reason,
+                },
+            )
+        )
+
+        is_invalid = prompt_injection_count >= _PROMPT_INJECTION_LIMIT
+        action_type = NextActionType.END if is_invalid else NextActionType.WAIT
+        next_action = NextAction(
+            type=action_type,
+            text=_PROMPT_INJECTION_END_TEXT if is_invalid else _PROMPT_INJECTION_WARNING_TEXT,
+            level=None,
+            payload={
+                "interview_status": (
+                    SessionReviewStatus.INVALID.value if is_invalid else SessionReviewStatus.IN_PROGRESS.value
+                ),
+                "prompt_injection_count": prompt_injection_count,
+                "prompt_injection_warning": not is_invalid,
+            },
+        )
+        after = self.state_machine.next_state(before, next_action.type)
+        turn = self._build_turn(
+            turn_id=turn_id,
+            turn_index=turn_index,
+            req=req,
+            question=current_question,
+            state_before=before,
+            state_after=after,
+            asr=asr_result,
+            preprocess=preprocess,
+            triggers=None,
+            evaluation=None,
+            next_action=next_action,
+            scaffold=None,
+        )
+        self.store.insert_turn(db, session_id, turn, idempotency_key=idempotency_key)
+        self.store.update_session(
+            db,
+            session_id,
+            state=after.value,
+            last_next_action=next_action,
+            current_question_cursor=None if is_invalid else (current_cursor.model_dump(mode="json") if current_cursor else None),
+            ended_at=datetime.now(timezone.utc) if is_invalid else None,
+        )
+
+        if is_invalid:
+            events.append(
+                self._event(
+                    session_id,
+                    turn_id,
+                    "session_invalidated",
+                    {
+                        "reason": "prompt_injection_limit",
+                        "prompt_injection_count": prompt_injection_count,
+                    },
+                )
+            )
+        else:
+            events.append(
+                self._event(
+                    session_id,
+                    turn_id,
+                    "prompt_injection_warned",
+                    {
+                        "prompt_injection_count": prompt_injection_count,
+                    },
+                )
+            )
+        events.extend(
+            [
+                self._event(
+                    session_id,
+                    turn.turn_id,
+                    "evaluation_completed",
+                    {
+                        "skipped": True,
+                        "reason": "prompt_injection_detected",
+                    },
+                ),
+                self._event(
+                    session_id,
+                    turn.turn_id,
+                    "next_action_decided",
+                    next_action.model_dump(mode="json"),
+                ),
+            ]
+        )
+        self.store.append_events(db, events)
+        self._record_turn_total(
+            turn_started,
+            session_id=session_id,
+            turn_id=turn.turn_id,
+            state_before=before.value,
+            state_after=after.value,
+            next_action=next_action.type.value,
+        )
+        log_event(
+            logger,
+            logging.WARNING,
+            "prompt_injection_handled",
+            session_id=session_id,
+            turn_id=turn_id,
+            prompt_injection_count=prompt_injection_count,
+            invalidated=is_invalid,
+            next_action=next_action.model_dump(mode="json"),
+        )
+        return turn, next_action
+
+    def _derive_session_review_status(
+        self,
+        session: Session,
+        *,
+        report: Report | None,
+    ) -> tuple[SessionReviewStatus, int, str | None]:
+        events = self.store.list_events(session.session_id)
+        prompt_injection_count = sum(1 for event in events if event["event_type"] == "prompt_injection_detected")
+        invalid_reason = None
+        for event in events:
+            if event["event_type"] != "session_invalidated":
+                continue
+            invalid_reason = str(event.get("payload", {}).get("reason") or "invalidated")
+            return SessionReviewStatus.INVALID, prompt_injection_count, invalid_reason
+        if report is not None or session.state == SessionState.S_END:
+            return SessionReviewStatus.COMPLETED, prompt_injection_count, None
+        return SessionReviewStatus.IN_PROGRESS, prompt_injection_count, None
+
     def _build_turn(
         self,
         turn_id: str,
@@ -672,21 +932,213 @@ class OrchestratorService:
             created_at=datetime.now(timezone.utc),
         )
 
+    def _generate_report_for_session(self, db, session_id: str, *, reason: str):
+        turns = self.store.list_turns_tx(db, session_id)
+        report, session_score = self._build_report(turns, reason=reason)
+        self.store.upsert_report(db, session_id, report)
+        return report, session_score
+
+    def _build_report(self, turns: list[Turn], *, reason: str):
+        session_score = self.session_scoring.score_session(turns)
+        overall = session_score.scores
+        timeline = [
+            ReportPoint(
+                turn_index=turn.turn_index,
+                scores=turn.evaluation.scores if turn.evaluation else overall,
+            )
+            for turn in turns
+        ]
+        conversation = self._build_conversation(turns)
+        llm_scoring = ReportLLMScoring(
+            source=session_score.source,
+            confidence=session_score.confidence,
+            overall=overall,
+            turns=self._build_turn_evaluations(turns),
+        )
+        report_notes = [f"ended:{reason}", *session_score.notes]
+        return (
+            Report(
+                overall=overall,
+                timeline=timeline,
+                conversation=conversation,
+                llm_scoring=llm_scoring,
+                notes=report_notes,
+            ),
+            session_score,
+        )
+
+    def _build_conversation(self, turns: list[Turn]) -> list[ReportDialogueMessage]:
+        messages: list[ReportDialogueMessage] = []
+        for turn in turns:
+            if turn.question and turn.question.text:
+                messages.append(
+                    ReportDialogueMessage(
+                        speaker="system",
+                        turn_index=turn.turn_index,
+                        text=turn.question.text,
+                        kind="question",
+                    )
+                )
+
+            answer = self._extract_turn_answer(turn)
+            if answer:
+                messages.append(
+                    ReportDialogueMessage(
+                        speaker="candidate",
+                        turn_index=turn.turn_index,
+                        text=answer,
+                        kind="answer",
+                    )
+                )
+
+            if (
+                turn.next_action
+                and turn.next_action.text
+                and turn.next_action.type in {NextActionType.SCAFFOLD, NextActionType.END}
+            ):
+                messages.append(
+                    ReportDialogueMessage(
+                        speaker="system",
+                        turn_index=turn.turn_index,
+                        text=turn.next_action.text,
+                        kind=turn.next_action.type.value.lower(),
+                    )
+                )
+        return messages
+
+    def _build_turn_evaluations(self, turns: list[Turn]) -> list[ReportTurnEvaluation]:
+        items: list[ReportTurnEvaluation] = []
+        for turn in turns:
+            items.append(
+                ReportTurnEvaluation(
+                    turn_id=turn.turn_id,
+                    turn_index=turn.turn_index,
+                    question=turn.question.text if turn.question else None,
+                    answer=self._extract_turn_answer(turn),
+                    scores=turn.evaluation.scores if turn.evaluation else None,
+                    final_confidence=turn.evaluation.final_confidence if turn.evaluation else None,
+                    judge_votes=turn.evaluation.judge_votes if turn.evaluation else None,
+                    evidence=turn.evaluation.evidence if turn.evaluation else None,
+                )
+            )
+        return items
+
+    def _extract_turn_answer(self, turn: Turn) -> str:
+        if turn.preprocess and turn.preprocess.clean_text:
+            return turn.preprocess.clean_text
+        if turn.input.text:
+            return turn.input.text
+        if turn.asr and turn.asr.raw_text:
+            return turn.asr.raw_text
+        return ""
+
+    def _build_full_conversation_history(
+        self,
+        db,
+        session_id: str,
+        *,
+        current_question: QuestionRef | None,
+        candidate_answer: str,
+        turn_index: int,
+    ) -> list[dict[str, object]]:
+        history: list[dict[str, object]] = []
+        turns = self.store.list_turns_tx(db, session_id)
+        for turn in turns:
+            if turn.question and turn.question.text:
+                history.append(
+                    {
+                        "role": "system",
+                        "turn_index": turn.turn_index,
+                        "text": turn.question.text,
+                    }
+                )
+            answer = self._extract_turn_answer(turn)
+            if answer:
+                history.append(
+                    {
+                        "role": "candidate",
+                        "turn_index": turn.turn_index,
+                        "text": answer,
+                    }
+                )
+
+        if current_question and current_question.text:
+            history.append(
+                {
+                    "role": "system",
+                    "turn_index": turn_index,
+                    "text": current_question.text,
+                }
+            )
+        if candidate_answer.strip():
+            history.append(
+                {
+                    "role": "candidate",
+                    "turn_index": turn_index,
+                    "text": candidate_answer.strip(),
+                }
+            )
+        return history
+
+    def _cursor_for_next_action(
+        self,
+        base_cursor: QuestionCursor | None,
+        *,
+        action_type: NextActionType,
+        prompt: str,
+        turn_index: int,
+        issue_last_question_notice: bool = False,
+    ) -> QuestionCursor:
+        asked_prompt_ids = list(base_cursor.asked_prompt_ids) if base_cursor else []
+        prompt_id = f"llm:{action_type.value.lower()}:{turn_index}"
+        if prompt_id not in asked_prompt_ids:
+            asked_prompt_ids.append(prompt_id)
+        if issue_last_question_notice and _LAST_QUESTION_NOTICE_MARKER not in asked_prompt_ids:
+            asked_prompt_ids.append(_LAST_QUESTION_NOTICE_MARKER)
+        prompt_kind = "question" if action_type == NextActionType.ASK else action_type.value.lower()
+        return QuestionCursor(
+            node_id=base_cursor.node_id if base_cursor else None,
+            prompt_id=prompt_id,
+            prompt_kind=prompt_kind,
+            prompt_text=prompt,
+            asked_prompt_ids=asked_prompt_ids,
+        )
+
+    def _elapsed_minutes(self, created_at: datetime) -> float:
+        delta = datetime.now(timezone.utc) - created_at
+        return max(0.0, delta.total_seconds() / 60.0)
+
+    def _last_question_notice_issued(self, cursor: QuestionCursor | None) -> bool:
+        if cursor is None:
+            return False
+        return _LAST_QUESTION_NOTICE_MARKER in cursor.asked_prompt_ids
+
+    def _question_turn_limit_reached(self, cursor: QuestionCursor | None) -> bool:
+        if cursor is None:
+            return False
+        prompt_count = sum(1 for prompt_id in cursor.asked_prompt_ids if prompt_id != _LAST_QUESTION_NOTICE_MARKER)
+        return prompt_count >= _MAX_TURNS_PER_QUESTION
+
+    def _with_last_question_notice(self, text: str | None) -> str:
+        prompt = (text or "").strip()
+        if not prompt:
+            return f"{_LAST_QUESTION_NOTICE_TEXT}。请你总结你最关键的一步思路与验证方式。"
+        if prompt.startswith(_LAST_QUESTION_NOTICE_TEXT):
+            return prompt
+        separator = "。" if not prompt.startswith(("，", "。", "；", "：")) else ""
+        return f"{_LAST_QUESTION_NOTICE_TEXT}{separator}{prompt}"
+
+    def _build_opening_prompt(self, seed_text: str | None) -> str:
+        guidance = "不要着急作答，先说说你打算怎么做。"
+        question = (seed_text or "").strip()
+        if not question:
+            return guidance
+        return f"{question}\n{guidance}"
+
     def _question_from_cursor(self, cursor: QuestionCursor | None) -> QuestionRef | None:
         if cursor is None or not cursor.prompt_text:
             return None
         return QuestionRef(qid=cursor.prompt_id, text=cursor.prompt_text)
-
-    def _update_theta(self, previous: DimScores | None, current: DimScores) -> DimScores:
-        if previous is None:
-            return current
-        alpha = 0.7
-        return DimScores(
-            plan=round(alpha * previous.plan + (1 - alpha) * current.plan, 2),
-            monitor=round(alpha * previous.monitor + (1 - alpha) * current.monitor, 2),
-            evaluate=round(alpha * previous.evaluate + (1 - alpha) * current.evaluate, 2),
-            adapt=round(alpha * previous.adapt + (1 - alpha) * current.adapt, 2),
-        )
 
     def _record_turn_stage(self, stage: str, started_at: float, *, session_id: str, turn_id: str) -> None:
         duration_seconds = perf_counter() - started_at
@@ -751,11 +1203,18 @@ class OrchestratorService:
             return 0.0
         return max_segment_ms / 1000.0
 
-    def _ensure_session_refs_exist(self, question_set_id: str, rubric_id: str) -> None:
+    def _ensure_session_refs_exist(
+        self,
+        question_set_id: str,
+        rubric_id: str,
+        scaffold_policy_id: str,
+    ) -> None:
         if not self._json_resource_exists(self.question_set_dir, question_set_id):
             raise ValueError(f"question_set not found: {question_set_id}")
         if not self._json_resource_exists(self.rubric_dir, rubric_id):
             raise ValueError(f"rubric not found: {rubric_id}")
+        if scaffold_policy_id.strip().lower() not in self.scaffold_policy_ids:
+            raise ValueError(f"scaffold_policy not found: {scaffold_policy_id}")
 
     def _json_resource_exists(self, directory: Path, resource_id: str) -> bool:
         if not resource_id.strip():
