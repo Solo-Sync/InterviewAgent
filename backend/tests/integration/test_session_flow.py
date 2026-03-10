@@ -10,8 +10,7 @@ from apps.api.main import app
 from libs.schemas.base import AsrResult, DimScores, EvaluationResult, NextActionType
 from libs.storage.postgres import sessions_table
 from libs.storage.files import FileStore
-from services.orchestrator.next_action_decider import NextActionDecision, NextActionDecisionError
-from services.orchestrator.selector import QuestionSelection
+from services.orchestrator.next_action_decider import NextActionDecision
 
 CANDIDATE_HEADERS = {
     "Authorization": (
@@ -30,8 +29,12 @@ def _mock_dialogue_generation(monkeypatch):
             return str(seed_text).strip()
         return f"请继续回答（{action_type.value}）。"
 
-    def _decide(*args, **kwargs):  # noqa: ANN002
-        raise NextActionDecisionError("mocked: use fallback policy path in integration tests")
+    def _decide(*args, **kwargs):  # noqa: ANN002, ARG001
+        return NextActionDecision(
+            action_type=NextActionType.ASK,
+            interviewer_reply="请继续说明你的思路。",
+            reasons=("继续",),
+        )
 
     monkeypatch.setattr(orchestrator.dialogue, "generate", _generate)
     monkeypatch.setattr(orchestrator.scaffold.dialogue, "generate", _generate)
@@ -99,19 +102,13 @@ def test_session_auto_end_generates_report_with_dialogue_and_evidence(monkeypatc
     client.headers.update(CANDIDATE_HEADERS)
 
     monkeypatch.setattr(
-        orchestrator.selector,
-        "select_next",
-        lambda *args, **kwargs: QuestionSelection(
+        orchestrator.next_action_decider,
+        "decide",
+        lambda *args, **kwargs: NextActionDecision(
             action_type=NextActionType.END,
-            question=None,
-            cursor=None,
-            exhausted=True,
+            interviewer_reply="感谢作答，本场面试到此结束。",
+            reasons=("结束面试",),
         ),
-    )
-    monkeypatch.setattr(
-        orchestrator.turn_scoring,
-        "score",
-        lambda *args, **kwargs: _turn_eval(plan=2.0, monitor=2.0, evaluate=2.0, adapt=2.0),
     )
 
     create_resp = client.post(
@@ -141,9 +138,10 @@ def test_session_auto_end_generates_report_with_dialogue_and_evidence(monkeypatc
     assert report["conversation"][0]["speaker"] == "system"
     assert report["conversation"][1]["speaker"] == "candidate"
     assert report["llm_scoring"] is not None
+    assert report["llm_scoring"]["source"] == "llm_zero_fallback"
     assert len(report["llm_scoring"]["turns"]) == 1
-    assert report["llm_scoring"]["turns"][0]["scores"] is not None
-    assert report["llm_scoring"]["turns"][0]["final_confidence"] == 0.8
+    assert report["llm_scoring"]["turns"][0]["scores"] is None
+    assert report["llm_scoring"]["turns"][0]["final_confidence"] is None
 
 
 def test_session_turn_issues_last_question_notice_then_forces_end(monkeypatch) -> None:
@@ -246,7 +244,7 @@ def test_session_turn_forces_end_after_twelve_turns(monkeypatch) -> None:
     assert report_resp.json()["data"]["report"]["notes"][0] == "ended:auto_end"
 
 
-def test_session_turn_help_trigger_applies_l2_scaffold_with_turn_evaluation() -> None:
+def test_session_turn_help_trigger_is_returned_without_turn_evaluation() -> None:
     client = TestClient(app)
     client.headers.update(
         {
@@ -275,12 +273,12 @@ def test_session_turn_help_trigger_applies_l2_scaffold_with_turn_evaluation() ->
     )
     assert turn_resp.status_code == 200
     payload = turn_resp.json()["data"]
-    assert payload["next_action"]["type"] == "SCAFFOLD"
-    assert payload["next_action"]["level"] == "L2"
-    assert payload["evaluation"] is not None
+    assert payload["next_action"]["type"] == "ASK"
+    assert any(trigger["type"] == "HELP_KEYWORD" for trigger in payload["triggers"])
+    assert payload["evaluation"] is None
 
 
-def test_session_turn_good_flow_emits_perturbation(monkeypatch) -> None:
+def test_session_turn_returns_llm_ask_without_turn_evaluation(monkeypatch) -> None:
     client = TestClient(app)
     client.headers.update(
         {
@@ -290,9 +288,13 @@ def test_session_turn_good_flow_emits_perturbation(monkeypatch) -> None:
         }
     )
     monkeypatch.setattr(
-        orchestrator.turn_scoring,
-        "score",
-        lambda *args, **kwargs: _turn_eval(plan=2.2, monitor=2.1, evaluate=2.3, adapt=2.0, confidence=0.9),
+        orchestrator.next_action_decider,
+        "decide",
+        lambda *args, **kwargs: NextActionDecision(
+            action_type=NextActionType.ASK,
+            interviewer_reply="如果只能用 2 分钟，你会怎么简化这个估算？",
+            reasons=("继续追问",),
+        ),
     )
 
     create_resp = client.post(
@@ -318,9 +320,10 @@ def test_session_turn_good_flow_emits_perturbation(monkeypatch) -> None:
     assert payload["turn"]["question"]["text"] == opening_prompt
     assert payload["next_action"]["type"] == "ASK"
     assert payload["next_action"]["text"] == "如果只能用 2 分钟，你会怎么简化这个估算？"
+    assert payload["evaluation"] is None
 
 
-def test_session_turn_low_scores_emit_probe(monkeypatch) -> None:
+def test_session_turn_returns_llm_probe_without_turn_evaluation(monkeypatch) -> None:
     client = TestClient(app)
     client.headers.update(
         {
@@ -330,9 +333,13 @@ def test_session_turn_low_scores_emit_probe(monkeypatch) -> None:
         }
     )
     monkeypatch.setattr(
-        orchestrator.turn_scoring,
-        "score",
-        lambda *args, **kwargs: _turn_eval(plan=1.0, monitor=1.9, evaluate=1.2, adapt=1.7, confidence=0.8),
+        orchestrator.next_action_decider,
+        "decide",
+        lambda *args, **kwargs: NextActionDecision(
+            action_type=NextActionType.PROBE,
+            interviewer_reply="请先不要给最终答案，说说你第一步准备做什么？",
+            reasons=("继续追问",),
+        ),
     )
 
     create_resp = client.post(
@@ -356,9 +363,10 @@ def test_session_turn_low_scores_emit_probe(monkeypatch) -> None:
     payload = turn_resp.json()["data"]
     assert payload["next_action"]["type"] == "PROBE"
     assert payload["next_action"]["text"] == "请先不要给最终答案，说说你第一步准备做什么？"
+    assert payload["evaluation"] is None
 
 
-def test_session_turn_routes_stress_signal_to_scaffold() -> None:
+def test_session_turn_exposes_stress_signal_trigger() -> None:
     client = TestClient(app)
     client.headers.update(CANDIDATE_HEADERS)
 
@@ -381,11 +389,11 @@ def test_session_turn_routes_stress_signal_to_scaffold() -> None:
     )
     assert turn_resp.status_code == 200
     payload = turn_resp.json()["data"]
-    assert payload["next_action"]["type"] == "SCAFFOLD"
-    assert payload["next_action"]["level"] == "L1"
+    assert payload["next_action"]["type"] == "ASK"
+    assert any(trigger["type"] == "STRESS_SIGNAL" for trigger in payload["triggers"])
 
 
-def test_session_turn_routes_repeated_answer_to_loop_scaffold() -> None:
+def test_session_turn_exposes_loop_trigger_on_repeated_answer() -> None:
     client = TestClient(app)
     client.headers.update(CANDIDATE_HEADERS)
 
@@ -415,12 +423,12 @@ def test_session_turn_routes_repeated_answer_to_loop_scaffold() -> None:
     )
     assert second_turn.status_code == 200
     payload = second_turn.json()["data"]
-    assert payload["next_action"]["type"] == "SCAFFOLD"
-    assert payload["next_action"]["level"] == "L1"
-    assert payload["next_action"]["text"] == "先明确目标，再列出两步可执行计划。"
+    assert payload["next_action"]["type"] == "ASK"
+    assert any(trigger["type"] == "LOOP" for trigger in payload["triggers"])
+    assert payload["evaluation"] is None
 
 
-def test_session_turn_advances_to_second_question_after_exhausting_first_branch(monkeypatch) -> None:
+def test_session_turn_preserves_llm_asks_across_multiple_turns(monkeypatch) -> None:
     client = TestClient(app)
     client.headers.update(
         {
@@ -429,10 +437,22 @@ def test_session_turn_advances_to_second_question_after_exhausting_first_branch(
             )
         }
     )
+    prompts = iter(
+        [
+            "如果只能用 2 分钟，你会怎么简化这个估算？",
+            "如果把范围改成外卖奶茶订单量，你的拆分会怎么变？",
+            "如果你完全拿不到统计数据，只能靠常识估算，你会如何控制误差？",
+            "在速度和准确性之间，你会怎么取舍？请说明判断标准。",
+        ]
+    )
     monkeypatch.setattr(
-        orchestrator.turn_scoring,
-        "score",
-        lambda *args, **kwargs: _turn_eval(plan=2.1, monitor=2.0, evaluate=2.2, adapt=2.0, confidence=0.9),
+        orchestrator.next_action_decider,
+        "decide",
+        lambda *args, **kwargs: NextActionDecision(
+            action_type=NextActionType.ASK,
+            interviewer_reply=next(prompts),
+            reasons=("继续追问",),
+        ),
     )
     create_resp = client.post(
         "/api/v1/sessions",

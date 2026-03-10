@@ -88,5 +88,5 @@ def test_metrics_endpoint_exposes_request_and_turn_metrics() -> None:
     assert "http_request_duration_seconds" in body
     assert "turn_stage_latency_seconds" in body
     assert 'stage="preprocess"' in body
-    assert 'stage="evaluation"' in body
+    assert 'stage="policy_llm"' in body
     assert "turn_total_latency_seconds" in body
