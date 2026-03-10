@@ -22,13 +22,27 @@ if str(BACKEND_ROOT) not in sys.path:
 from apps.api.core.config import BACKEND_ROOT as CONFIG_BACKEND_ROOT
 from apps.api.core.config import settings
 from libs.env_loader import load_project_env
-from libs.llm_gateway.client import LLMGateway
+from libs.llm_gateway.client import LLMGateway, build_json_schema_response_format
 
 load_project_env()
 
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "artifacts" / "sim_runs"
 DEFAULT_API_BASE = "http://127.0.0.1:8000/api/v1"
 SENSITIVE_KEYS = {"access_token", "authorization", "password", "invite_token"}
+_SIMULATOR_RESPONSE_FORMAT = build_json_schema_response_format(
+    name="candidate_simulator_reply",
+    description="A simulated candidate response in an interview.",
+    schema={
+        "type": "object",
+        "properties": {
+            "answer": {"type": "string"},
+            "should_stop": {"type": "boolean"},
+            "rationale": {"type": "string"},
+        },
+        "required": ["answer", "should_stop", "rationale"],
+        "additionalProperties": False,
+    },
+)
 
 
 @dataclass(frozen=True)
@@ -410,12 +424,21 @@ class CandidateSimulator:
         turn_index: int,
     ) -> tuple[SimulatorDecision, dict[str, Any]]:
         prompt = build_simulator_prompt(persona=persona, conversation=conversation, turn_index=turn_index)
-        raw = self.gateway.complete_sync(self.model, prompt, timeout_s=self.timeout_s)
+        raw = self.gateway.complete_sync(
+            self.model,
+            prompt,
+            timeout_s=self.timeout_s,
+            response_format=_SIMULATOR_RESPONSE_FORMAT,
+        )
         content = raw.get("content")
         if not isinstance(content, str) or not content.strip():
             raise SimulationError("simulator gateway returned empty content")
         try:
-            decision = parse_simulator_decision(content)
+            parsed = raw.get("parsed") if isinstance(raw, dict) else None
+            if isinstance(parsed, dict):
+                decision = parse_simulator_decision(json.dumps(parsed, ensure_ascii=False))
+            else:
+                decision = parse_simulator_decision(content)
         except SimulationError:
             fallback = SimulatorDecision(
                 answer=content.strip()[:240],

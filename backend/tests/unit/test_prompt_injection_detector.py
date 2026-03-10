@@ -5,15 +5,27 @@ class _GatewayStub:
     def __init__(self, content: str) -> None:
         self.content = content
         self.last_prompt = ""
+        self.last_response_format = None
 
-    def complete_sync(self, model: str, prompt: str, timeout_s: float = 4.0):  # noqa: ANN001
+    def complete_sync(  # noqa: ANN001
+        self,
+        model: str,
+        prompt: str,
+        timeout_s: float = 4.0,
+        *,
+        response_format: dict | None = None,
+    ):
         self.last_prompt = prompt
+        self.last_response_format = response_format
         return {"content": self.content}
 
 
 def test_detector_parses_positive_json_response() -> None:
     gateway = _GatewayStub(
-        '{"is_prompt_injection": true, "confidence": 0.93, "category": "prompt_exfiltration", "reason": "试图索取系统提示词"}'
+        (
+            '{"is_prompt_injection": true, "confidence": 0.93, '
+            '"category": "prompt_exfiltration", "reason": "试图索取系统提示词"}'
+        )
     )
     detector = PromptInjectionDetector(gateway=gateway, model="test-model")
 
@@ -24,6 +36,8 @@ def test_detector_parses_positive_json_response() -> None:
     assert result.category == "prompt_exfiltration"
     assert result.reason == "试图索取系统提示词"
     assert "<candidate_answer>" in gateway.last_prompt
+    assert gateway.last_response_format["type"] == "json_schema"
+    assert gateway.last_response_format["json_schema"]["name"] == "prompt_injection_check"
 
 
 def test_detector_defaults_to_safe_reason_when_response_is_negative() -> None:

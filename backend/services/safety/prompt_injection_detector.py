@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-from libs.llm_gateway.client import LLMGateway
+from libs.llm_gateway.client import LLMGateway, build_json_schema_response_format
 
 _DETECTOR_MODEL_ENV_KEYS = (
     "PROMPT_INJECTION_MODEL_NAME",
@@ -62,6 +62,32 @@ _SYSTEM_PROMPT = """
 - confidence 取值范围 0 到 1。
 - reason 要简短、明确、可审计。
 """.strip()
+_PROMPT_INJECTION_RESPONSE_FORMAT = build_json_schema_response_format(
+    name="prompt_injection_check",
+    description="Prompt injection detection result.",
+    schema={
+        "type": "object",
+        "properties": {
+            "is_prompt_injection": {"type": "boolean"},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "category": {
+                "type": "string",
+                "enum": [
+                    "instruction_override",
+                    "prompt_exfiltration",
+                    "role_hijack",
+                    "policy_probe",
+                    "format_manipulation",
+                    "other",
+                    "none",
+                ],
+            },
+            "reason": {"type": "string"},
+        },
+        "required": ["is_prompt_injection", "confidence", "category", "reason"],
+        "additionalProperties": False,
+    },
+)
 
 
 class PromptInjectionDetectionError(ValueError):
@@ -82,7 +108,7 @@ class PromptInjectionDetector:
         *,
         gateway: LLMGateway | None = None,
         model: str | None = None,
-        timeout_s: float = 4.0,
+        timeout_s: float = 60.0,
     ) -> None:
         self.gateway = gateway or LLMGateway()
         self.model = model or self._resolve_model()
@@ -98,17 +124,29 @@ class PromptInjectionDetector:
             "</candidate_answer>\n"
         )
         try:
-            response = self.gateway.complete_sync(self.model, prompt, timeout_s=self.timeout_s)
+            response = self.gateway.complete_sync(
+                self.model,
+                prompt,
+                timeout_s=self.timeout_s,
+                response_format=_PROMPT_INJECTION_RESPONSE_FORMAT,
+            )
         except Exception as exc:  # noqa: BLE001
-            raise PromptInjectionDetectionError(f"failed to detect prompt injection: {exc}") from exc
+            raise PromptInjectionDetectionError(
+                f"failed to detect prompt injection: {exc}"
+            ) from exc
 
-        content = response.get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise PromptInjectionDetectionError("prompt injection detector response missing content")
-
-        payload = self._parse_json_payload(content)
+        payload = response.get("parsed") if isinstance(response, dict) else None
         if not isinstance(payload, dict):
-            raise PromptInjectionDetectionError("prompt injection detector response is not valid JSON")
+            content = response.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise PromptInjectionDetectionError(
+                    "prompt injection detector response missing content"
+                )
+            payload = self._parse_json_payload(content)
+        if not isinstance(payload, dict):
+            raise PromptInjectionDetectionError(
+                "prompt injection detector response is not valid JSON"
+            )
 
         is_prompt_injection = bool(payload.get("is_prompt_injection"))
         confidence = self._parse_confidence(payload.get("confidence"))

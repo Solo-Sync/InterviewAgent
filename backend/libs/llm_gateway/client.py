@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -15,10 +16,31 @@ from libs.readiness import ReadinessProbe
 
 _UNSET = object()
 logger = logging.getLogger(__name__)
+_DEFAULT_SYSTEM_PROMPT = "You are a strict JSON output scorer."
 
 
 class LLMGatewayError(RuntimeError):
     pass
+
+
+def build_json_schema_response_format(
+    *,
+    name: str,
+    schema: dict[str, Any],
+    description: str | None = None,
+    strict: bool = True,
+) -> dict[str, Any]:
+    json_schema: dict[str, Any] = {
+        "name": name,
+        "schema": schema,
+        "strict": strict,
+    }
+    if description:
+        json_schema["description"] = description
+    return {
+        "type": "json_schema",
+        "json_schema": json_schema,
+    }
 
 
 class LLMGateway:
@@ -73,7 +95,15 @@ class LLMGateway:
             )
         return ReadinessProbe(status="ready")
 
-    async def complete(self, model: str, prompt: str, timeout_s: float = 3.0) -> dict[str, Any]:
+    async def complete(
+        self,
+        model: str,
+        prompt: str,
+        timeout_s: float = 3.0,
+        *,
+        system_prompt: str | None = None,
+        response_format: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         call_started = perf_counter()
         log_event(
             logger,
@@ -82,6 +112,7 @@ class LLMGateway:
             provider=self.provider,
             model=model,
             timeout_s=timeout_s,
+            response_format_type=(response_format or {}).get("type"),
             prompt=prompt,
             prompt_chars=len(prompt),
         )
@@ -103,7 +134,13 @@ class LLMGateway:
             return result
         if self.provider in {"openai", "openai_compatible"}:
             try:
-                result = await self._complete_openai(model, prompt, timeout_s=timeout_s)
+                result = await self._complete_openai(
+                    model,
+                    prompt,
+                    timeout_s=timeout_s,
+                    system_prompt=system_prompt,
+                    response_format=response_format,
+                )
             except Exception as exc:  # noqa: BLE001
                 self._log_call_failed(
                     model=model,
@@ -122,7 +159,13 @@ class LLMGateway:
             return result
         if self.provider in self._ALIYUN_PROVIDERS:
             try:
-                result = await self._complete_dashscope(model, prompt, timeout_s=timeout_s)
+                result = await self._complete_dashscope(
+                    model,
+                    prompt,
+                    timeout_s=timeout_s,
+                    system_prompt=system_prompt,
+                    response_format=response_format,
+                )
             except Exception as exc:  # noqa: BLE001
                 self._log_call_failed(
                     model=model,
@@ -147,8 +190,22 @@ class LLMGateway:
         )
         raise LLMGatewayError(f"unsupported gateway provider: {self.provider}")
 
-    def complete_sync(self, model: str, prompt: str, timeout_s: float = 3.0) -> dict[str, Any]:
-        coro = self.complete(model=model, prompt=prompt, timeout_s=timeout_s)
+    def complete_sync(
+        self,
+        model: str,
+        prompt: str,
+        timeout_s: float = 3.0,
+        *,
+        system_prompt: str | None = None,
+        response_format: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        coro = self.complete(
+            model=model,
+            prompt=prompt,
+            timeout_s=timeout_s,
+            system_prompt=system_prompt,
+            response_format=response_format,
+        )
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -164,21 +221,20 @@ class LLMGateway:
         prompt: str,
         *,
         timeout_s: float,
+        system_prompt: str | None,
+        response_format: dict[str, Any] | None,
     ) -> dict[str, Any]:
         if not self.api_key:
             raise LLMGatewayError("missing API key for openai gateway provider")
 
         base = self.base_url.rstrip("/")
         endpoint = f"{base}/v1/chat/completions"
-        payload = {
-            "model": model,
-            "temperature": 0.0,
-            "messages": [
-                {"role": "system", "content": "You are a strict JSON output scorer."},
-                {"role": "user", "content": prompt},
-            ],
-            "response_format": {"type": "json_object"},
-        }
+        payload = self._build_openai_payload(
+            model=model,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            response_format=response_format,
+        )
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -188,18 +244,36 @@ class LLMGateway:
             async with httpx.AsyncClient(timeout=timeout_s) as client:
                 response = await client.post(endpoint, json=payload, headers=headers)
                 response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise LLMGatewayError(
+                f"upstream llm timeout after {timeout_s:.1f}s (provider={self.provider}, endpoint={endpoint})"
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            body_preview = self._response_preview(exc.response)
+            raise LLMGatewayError(
+                "upstream llm http error "
+                f"(provider={self.provider}, endpoint={endpoint}, status={exc.response.status_code}, "
+                f"body={body_preview})"
+            ) from exc
         except httpx.HTTPError as exc:
-            raise LLMGatewayError(f"upstream llm call failed: {exc}") from exc
+            raise LLMGatewayError(
+                "upstream llm transport error "
+                f"(provider={self.provider}, endpoint={endpoint}, error={type(exc).__name__}: {exc})"
+            ) from exc
 
         data = response.json()
         content = self._extract_content(data)
-        return {
+        result = {
             "model": model,
             "content": content,
             "provider": self.provider,
             "timeout_s": timeout_s,
             "raw": data,
         }
+        parsed = self._maybe_extract_structured_payload(content, response_format)
+        if parsed is not None:
+            result["parsed"] = parsed
+        return result
 
     async def _complete_dashscope(
         self,
@@ -207,21 +281,19 @@ class LLMGateway:
         prompt: str,
         *,
         timeout_s: float,
+        system_prompt: str | None,
+        response_format: dict[str, Any] | None,
     ) -> dict[str, Any]:
         if not self.api_key:
             raise LLMGatewayError("missing API key for aliyun dashscope gateway provider")
 
         endpoint = self._resolve_dashscope_endpoint()
-        payload = {
-            "model": model,
-            "input": {
-                "messages": [
-                    {"role": "system", "content": "You are a strict JSON output scorer."},
-                    {"role": "user", "content": prompt},
-                ]
-            },
-            "parameters": {"result_format": "message"},
-        }
+        payload = self._build_dashscope_payload(
+            model=model,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            response_format=response_format,
+        )
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -233,18 +305,80 @@ class LLMGateway:
             async with httpx.AsyncClient(timeout=timeout_s) as client:
                 response = await client.post(endpoint, json=payload, headers=headers)
                 response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise LLMGatewayError(
+                f"upstream llm timeout after {timeout_s:.1f}s (provider={self.provider}, endpoint={endpoint})"
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            body_preview = self._response_preview(exc.response)
+            raise LLMGatewayError(
+                "upstream llm http error "
+                f"(provider={self.provider}, endpoint={endpoint}, status={exc.response.status_code}, "
+                f"body={body_preview})"
+            ) from exc
         except httpx.HTTPError as exc:
-            raise LLMGatewayError(f"upstream llm call failed: {exc}") from exc
+            raise LLMGatewayError(
+                "upstream llm transport error "
+                f"(provider={self.provider}, endpoint={endpoint}, error={type(exc).__name__}: {exc})"
+            ) from exc
 
         data = response.json()
         content = self._extract_dashscope_content(data)
-        return {
+        result = {
             "model": model,
             "content": content,
             "provider": self.provider,
             "timeout_s": timeout_s,
             "raw": data,
         }
+        parsed = self._maybe_extract_structured_payload(content, response_format)
+        if parsed is not None:
+            result["parsed"] = parsed
+        return result
+
+    def _build_openai_payload(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        system_prompt: str | None,
+        response_format: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        payload = {
+            "model": model,
+            "temperature": 0.0,
+            "messages": self._build_messages(prompt=prompt, system_prompt=system_prompt),
+        }
+        if response_format is None:
+            payload["response_format"] = {"type": "json_object"}
+        else:
+            payload["response_format"] = response_format
+        return payload
+
+    def _build_dashscope_payload(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        system_prompt: str | None,
+        response_format: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        parameters: dict[str, Any] = {"result_format": "message"}
+        if response_format is not None:
+            parameters["response_format"] = response_format
+        return {
+            "model": model,
+            "input": {
+                "messages": self._build_messages(prompt=prompt, system_prompt=system_prompt),
+            },
+            "parameters": parameters,
+        }
+
+    def _build_messages(self, *, prompt: str, system_prompt: str | None) -> list[dict[str, str]]:
+        return [
+            {"role": "system", "content": system_prompt or _DEFAULT_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
 
     def _extract_content(self, payload: dict[str, Any]) -> str:
         choices = payload.get("choices") or []
@@ -301,6 +435,45 @@ class LLMGateway:
             return text
 
         raise LLMGatewayError("dashscope response missing text content")
+
+    def _maybe_extract_structured_payload(
+        self,
+        content: str,
+        response_format: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(content, str):
+            return None
+        if (response_format or {}).get("type") != "json_schema":
+            return None
+        return self._extract_json_object(content)
+
+    def _extract_json_object(self, content: str) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(content)
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+
+        start = content.find("{")
+        end = content.rfind("}")
+        if start == -1 or end <= start:
+            return None
+        try:
+            payload = json.loads(content[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _response_preview(self, response: httpx.Response | None) -> str:
+        if response is None:
+            return ""
+        text = (response.text or "").replace("\n", " ").strip()
+        if not text:
+            return ""
+        if len(text) > 280:
+            return f"{text[:280]}..."
+        return text
 
     def _log_call_completed(
         self,

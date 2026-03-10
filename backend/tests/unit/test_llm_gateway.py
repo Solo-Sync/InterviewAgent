@@ -1,6 +1,6 @@
 import pytest
 
-from libs.llm_gateway.client import LLMGateway, LLMGatewayError
+from libs.llm_gateway.client import LLMGateway, LLMGatewayError, build_json_schema_response_format
 
 
 def test_stub_provider_is_not_configured() -> None:
@@ -76,3 +76,68 @@ def test_dashscope_extract_raises_on_invalid_payload() -> None:
     gateway = LLMGateway(provider="aliyun", api_key="k")
     with pytest.raises(LLMGatewayError):
         gateway._extract_dashscope_content({"output": {"choices": []}})
+
+
+def test_openai_payload_includes_json_schema_response_format() -> None:
+    gateway = LLMGateway(provider="openai", api_key="k")
+    response_format = build_json_schema_response_format(
+        name="demo_schema",
+        schema={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+    )
+
+    payload = gateway._build_openai_payload(
+        model="qwen-plus",
+        prompt="Return a value",
+        system_prompt=None,
+        response_format=response_format,
+    )
+
+    assert payload["response_format"]["type"] == "json_schema"
+    assert payload["response_format"]["json_schema"]["name"] == "demo_schema"
+    assert payload["messages"][0]["role"] == "system"
+
+
+def test_dashscope_payload_includes_json_schema_response_format() -> None:
+    gateway = LLMGateway(provider="aliyun", api_key="k")
+    response_format = build_json_schema_response_format(
+        name="demo_schema",
+        schema={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+    )
+
+    payload = gateway._build_dashscope_payload(
+        model="qwen-plus",
+        prompt="Return a value",
+        system_prompt=None,
+        response_format=response_format,
+    )
+
+    assert payload["parameters"]["result_format"] == "message"
+    assert payload["parameters"]["response_format"]["type"] == "json_schema"
+    assert payload["parameters"]["response_format"]["json_schema"]["name"] == "demo_schema"
+
+
+def test_json_schema_response_extracts_parsed_payload() -> None:
+    gateway = LLMGateway(provider="aliyun", api_key="k")
+    response_format = build_json_schema_response_format(
+        name="demo_schema",
+        schema={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+    )
+
+    parsed = gateway._maybe_extract_structured_payload('{"value":"ok"}', response_format)
+
+    assert parsed == {"value": "ok"}
