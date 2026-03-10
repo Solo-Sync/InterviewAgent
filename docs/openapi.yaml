@@ -553,7 +553,7 @@ components:
 
     NextActionType:
       type: string
-      enum: [ASK, PROBE, SCAFFOLD, CALM, END, WAIT]
+      enum: [ASK, PROBE, SCAFFOLD, END, WAIT]
 
     ScaffoldLevel:
       type: string

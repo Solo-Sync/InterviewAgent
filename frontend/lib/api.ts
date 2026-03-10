@@ -116,7 +116,7 @@ export async function createInterviewSession(candidateId: string, displayName = 
       mode: "text",
       question_set_id: "qs_fermi_v1",
       scoring_policy_id: "rubric_v1",
-      scaffold_policy_id: "scaffold_default_v1",
+      scaffold_policy_id: "scaffold_v1",
     }),
   })
 }

@@ -54,7 +54,7 @@ pnpm install
 pnpm dev
 ```
 
-前端开发服务器会通过 `next.config.mjs` 将 `/api/*` 代理到后端（默认 `http://127.0.0.1:8000`，可通过 `BACKEND_ORIGIN` 覆盖）。
+前端开发服务器通过 `frontend/app/api/v1/[...path]/route.ts` 将 `/api/v1/*` 代理到后端（默认 `http://127.0.0.1:8000`，可通过 `BACKEND_ORIGIN` 覆盖）。
 
 ## Testing
 
