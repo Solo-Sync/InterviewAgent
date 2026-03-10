@@ -26,6 +26,7 @@ class Settings:
     annotator_login_email: str
     annotator_login_password: str
     candidate_registry_path: str
+    scaffold_policy_ids: tuple[str, ...]
     allow_remote_audio_fetch: bool
     remote_audio_max_bytes: int
     remote_audio_allowed_hosts: tuple[str, ...]
@@ -83,6 +84,8 @@ def _validate_settings(settings: Settings) -> Settings:
         candidate_registry = (BACKEND_ROOT / candidate_registry).resolve()
     if not candidate_registry.is_file():
         raise ValueError(f"CANDIDATE_REGISTRY_PATH does not exist: {candidate_registry}")
+    if not settings.scaffold_policy_ids:
+        raise ValueError("SCAFFOLD_POLICY_IDS must contain at least one policy id")
 
     if settings.app_env != "dev":
         if not settings.auth_token_secret.strip() or settings.auth_token_secret == "dev-auth-secret":
@@ -106,6 +109,7 @@ def _validate_settings(settings: Settings) -> Settings:
         annotator_login_email=settings.annotator_login_email,
         annotator_login_password=settings.annotator_login_password,
         candidate_registry_path=settings.candidate_registry_path,
+        scaffold_policy_ids=settings.scaffold_policy_ids,
         allow_remote_audio_fetch=settings.allow_remote_audio_fetch,
         remote_audio_max_bytes=settings.remote_audio_max_bytes,
         remote_audio_allowed_hosts=settings.remote_audio_allowed_hosts,
@@ -128,6 +132,7 @@ def _load_settings() -> Settings:
             annotator_login_email=os.getenv("ANNOTATOR_LOGIN_EMAIL", "annotator@company.com"),
             annotator_login_password=os.getenv("ANNOTATOR_LOGIN_PASSWORD", "password123"),
             candidate_registry_path=os.getenv("CANDIDATE_REGISTRY_PATH", str(DEFAULT_CANDIDATE_REGISTRY)),
+            scaffold_policy_ids=_as_csv(os.getenv("SCAFFOLD_POLICY_IDS", "scaffold_v1")),
             allow_remote_audio_fetch=_as_bool(os.getenv("ALLOW_REMOTE_AUDIO_FETCH"), default=False),
             remote_audio_max_bytes=_as_int(os.getenv("REMOTE_AUDIO_MAX_BYTES"), default=10 * 1024 * 1024),
             remote_audio_allowed_hosts=_as_csv(os.getenv("REMOTE_AUDIO_ALLOWED_HOSTS")),

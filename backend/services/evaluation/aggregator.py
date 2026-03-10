@@ -15,7 +15,6 @@ from libs.schemas.base import (
 from services.evaluation.discount import DiscountPolicy
 from services.evaluation.judges import (
     build_default_judges,
-    build_turn_level_judges,
     default_reason_for_dimension,
 )
 from services.evaluation.interfaces import EvaluationJudge
@@ -36,13 +35,11 @@ class ScoreAggregator:
     def __init__(
         self,
         *,
-        judge_mode: str = "llm",
+        judge_mode: str = "heuristic",
         judges: list[EvaluationJudge] | None = None,
     ) -> None:
         if judges is None:
-            if judge_mode == "turn_aux":
-                judges = build_turn_level_judges()
-            elif judge_mode == "llm":
+            if judge_mode == "heuristic":
                 judges = build_default_judges()
             else:
                 raise ValueError(f"unknown judge_mode: {judge_mode}")

@@ -36,6 +36,36 @@ def test_trigger_detector_marks_stress_signal() -> None:
     assert any(trigger.type.value == "STRESS_SIGNAL" for trigger in triggers)
 
 
+def test_trigger_detector_marks_help_for_no_idea_phrase() -> None:
+    detector = TriggerDetector()
+
+    triggers = detector.detect("我现在没思路，可以给我一个框架吗？")
+
+    assert any(trigger.type.value == "HELP_KEYWORD" for trigger in triggers)
+
+
+def test_trigger_detector_marks_offtrack_for_gossip_answer() -> None:
+    detector = TriggerDetector()
+
+    triggers = detector.detect(
+        "先不估算了，我们聊聊奶茶品牌八卦和明星联名吧。",
+        question_text="估算你所在城市一天会卖出多少杯奶茶？",
+    )
+
+    assert any(trigger.type.value == "OFFTRACK" for trigger in triggers)
+
+
+def test_trigger_detector_does_not_mark_offtrack_for_estimation_with_movie_example() -> None:
+    detector = TriggerDetector()
+
+    triggers = detector.detect(
+        "我会先估算电影联名奶茶的目标人群，再拆分频次并验证数量级。",
+        question_text="估算你所在城市一天会卖出多少杯奶茶？",
+    )
+
+    assert all(trigger.type.value != "OFFTRACK" for trigger in triggers)
+
+
 def test_trigger_detector_marks_loop_against_recent_texts() -> None:
     detector = TriggerDetector()
 

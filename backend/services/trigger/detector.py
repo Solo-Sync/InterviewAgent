@@ -1,12 +1,17 @@
 from libs.schemas.base import Trigger, TriggerType
 from services.trigger.features import extract_features, text_similarity
+from services.trigger.offtrack_classifier import OfftrackClassifier
 
 
 class TriggerDetector:
+    def __init__(self) -> None:
+        self.offtrack_classifier = OfftrackClassifier()
+
     def detect(
         self,
         clean_text: str,
         *,
+        question_text: str | None = None,
         recent_texts: list[str] | None = None,
         silence_s: float = 0.0,
         silence_threshold_s: float = 15.0,
@@ -29,6 +34,16 @@ class TriggerDetector:
             triggers.append(Trigger(type=TriggerType.STRESS_SIGNAL, score=0.85, detail="stress language detected"))
         if features["length"] <= 8 and features["token_count"] <= 1:
             triggers.append(Trigger(type=TriggerType.OFFTRACK, score=0.6, detail="too short"))
+        if features["token_count"] >= 6:
+            offtrack = self.offtrack_classifier.predict(clean_text, question_text=question_text)
+            if offtrack.is_offtrack:
+                triggers.append(
+                    Trigger(
+                        type=TriggerType.OFFTRACK,
+                        score=offtrack.score,
+                        detail=offtrack.detail,
+                    )
+                )
         if recent_texts:
             similarities = [
                 text_similarity(clean_text, previous)
