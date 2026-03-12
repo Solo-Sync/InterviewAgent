@@ -22,6 +22,12 @@ Thumbs.db
 tmp/
 artifacts/
 *.db
+infra/env/*.env
+!infra/env/*.example.env
+infra/secrets/*
+!infra/secrets/.gitignore
+!infra/secrets/*.example
+infra/backups/
 
 # Python caches and coverage at repo root
 __pycache__/

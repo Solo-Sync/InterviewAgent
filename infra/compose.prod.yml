@@ -1,0 +1,152 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    env_file:
+      - ./env/postgres.prod.env
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./env/backend.prod.env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-interview}
+      DB_USER: ${POSTGRES_USER:-interview}
+      DB_PASSWORD_FILE: /run/secrets/postgres_password
+      AUTH_TOKEN_SECRET_FILE: /run/secrets/auth_token_secret
+      ADMIN_LOGIN_PASSWORD_FILE: /run/secrets/admin_login_password
+      ANNOTATOR_LOGIN_PASSWORD_FILE: /run/secrets/annotator_login_password
+    secrets:
+      - postgres_password
+      - auth_token_secret
+      - admin_login_password
+      - annotator_login_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app_net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys, urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5); sys.exit(0)",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./env/frontend.prod.env
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - app_net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  proxy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    environment:
+      SERVER_NAME: ${SERVER_NAME:?set SERVER_NAME in infra/prod.env}
+    depends_on:
+      frontend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - app_net
+      - edge
+
+  db-backup:
+    image: postgres:16
+    restart: unless-stopped
+    profiles:
+      - ops
+    env_file:
+      - ./env/postgres.prod.env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      PGPASSWORD_FILE: /run/secrets/postgres_password
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+    secrets:
+      - postgres_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - postgres_backups:/backups
+      - ./scripts/backup-loop.sh:/usr/local/bin/backup-loop.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/backup-loop.sh"]
+    networks:
+      - app_net
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  auth_token_secret:
+    file: ./secrets/auth_token_secret
+  admin_login_password:
+    file: ./secrets/admin_login_password
+  annotator_login_password:
+    file: ./secrets/annotator_login_password
+
+volumes:
+  postgres_data:
+  postgres_backups:
+  caddy_data:
+  caddy_config:
+
+networks:
+  app_net:
+    driver: bridge
+    internal: true
+  edge:
+    driver: bridge
