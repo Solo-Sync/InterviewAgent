@@ -56,6 +56,17 @@ pnpm dev
 
 前端开发服务器通过 `frontend/app/api/v1/[...path]/route.ts` 将 `/api/v1/*` 代理到后端（默认 `http://127.0.0.1:8000`，可通过 `BACKEND_ORIGIN` 覆盖）。
 
+## 生产部署
+
+仓库现在包含一套生产用 Docker 部署文件：
+
+- `backend/Dockerfile`: 构建后端生产镜像，容器启动前自动等待 PostgreSQL 并执行 `alembic upgrade head`
+- `frontend/Dockerfile`: 执行 `next build`，以 `next start` 运行前端生产包
+- `infra/compose.prod.yml`: 编排 PostgreSQL、API、Next.js、Caddy 反向代理和可选备份服务
+- `infra/Caddyfile`: 统一 80/443 入口和自动 HTTPS
+
+部署细节、环境变量与备份策略见 [docs/11_deployment.md](./docs/11_deployment.md)。
+
 ## Testing
 
 后端全量测试：
@@ -73,27 +84,3 @@ pnpm -s lint
 ```
 
 仓库已包含 GitHub Actions 工作流 [`.github/workflows/ci.yml`](./.github/workflows/ci.yml)，会执行后端测试和前端类型检查。
-
-## Interview Simulation
-
-可用脚本通过真实 API 调用后端，并用 LLM 模拟候选人完成多轮面试，导出完整审阅数据：
-
-```bash
-cd backend
-uv run python scripts/simulate_interviews.py \
-  --api-base-url http://127.0.0.1:8000/api/v1 \
-  --persona structured \
-  --persona adversarial \
-  --runs-per-persona 2
-```
-
-输出目录默认在 `artifacts/sim_runs/<timestamp>_llm-sim/`，每个 session 会保存：
-
-- `session_create.json`
-- `turns.json`
-- `report.json`
-- `admin_detail.json`
-- `events.jsonl`
-- `simulator_trace.jsonl`
-- `transcript.md`
-- `review_template.md`

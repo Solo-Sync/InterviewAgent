@@ -271,17 +271,6 @@ export function AdminReview({ sessionSummary, onBack }: AdminReviewProps) {
                   ))}
                 </div>
 
-                <div className="rounded-lg border border-border bg-card p-4">
-                  <p className="text-sm font-medium text-foreground">Timeline</p>
-                  <div className="mt-3 flex flex-col gap-2">
-                    {report.timeline.map((point) => (
-                      <div key={point.turn_index} className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">Turn {point.turn_index + 1}</span>
-                        <span className="font-medium text-foreground">{averageScore(point.scores)}/100</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
               </>
             ) : (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
