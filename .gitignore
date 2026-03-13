@@ -40,3 +40,7 @@ htmlcov/
 # Local virtualenvs outside service folders
 .venv/
 venv/
+
+# Local question bank drafts
+backend/data/question_sets/qs_metacog_v1.json
+backend/data/question_sets/qs_fermi_complex_*.json
