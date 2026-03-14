@@ -35,8 +35,8 @@ function validateCandidateCredentials(username: string, password: string): strin
 export function LoginScreen({ onLogin }: LoginScreenProps) {
   const [selectedRole, setSelectedRole] = useState<"admin" | "candidate">("candidate")
   const [candidateMode, setCandidateMode] = useState<"login" | "register">("register")
-  const [adminEmail, setAdminEmail] = useState("admin@company.com")
-  const [adminPassword, setAdminPassword] = useState("password123")
+  const [adminEmail, setAdminEmail] = useState("")
+  const [adminPassword, setAdminPassword] = useState("")
   const [candidateUsername, setCandidateUsername] = useState("")
   const [candidatePassword, setCandidatePassword] = useState("")
   const [errorText, setErrorText] = useState<string | null>(null)
@@ -45,8 +45,6 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
   useEffect(() => {
     if (selectedRole === "admin") {
       setCandidateMode("login")
-      setAdminEmail("admin@company.com")
-      setAdminPassword("password123")
     }
     setErrorText(null)
   }, [selectedRole])
@@ -161,7 +159,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                 <Input
                   id="identifier"
                   type={selectedRole === "admin" ? "email" : "text"}
-                  placeholder={selectedRole === "admin" ? "admin@company.com" : "Only letters and digits, max 20"}
+                  placeholder={selectedRole === "admin" ? "Enter admin email" : "Only letters and digits, max 20"}
                   value={selectedRole === "admin" ? adminEmail : candidateUsername}
                   onChange={(event) =>
                     selectedRole === "admin"
