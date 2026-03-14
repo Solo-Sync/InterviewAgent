@@ -71,7 +71,6 @@ InterviewAgent/
 
 - `backend/data/question_sets/*.json`
 - `backend/data/rubrics/*.json`
-- `backend/data/candidates/dev_candidates.json`
 - `backend/.env.example`
 - `frontend/.env.example`
 

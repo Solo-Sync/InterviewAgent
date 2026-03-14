@@ -72,7 +72,6 @@ pnpm dev
 - `ADMIN_LOGIN_PASSWORD`
 - `ANNOTATOR_LOGIN_EMAIL`
 - `ANNOTATOR_LOGIN_PASSWORD`
-- `CANDIDATE_REGISTRY_PATH`
 - `SCAFFOLD_POLICY_IDS`
 
 ### 音频远程拉取
@@ -242,8 +241,15 @@ docker compose --env-file infra/prod.env -f infra/compose.prod.yml logs -f proxy
 
 - `postgres_data`: PostgreSQL 数据目录
 - `postgres_backups`: `pg_dump` 备份文件
+- `api_tmp`: 后端 `FileStore` 临时文件目录
 - `caddy_data`: TLS 证书与 ACME 状态
 - `caddy_config`: Caddy 运行时配置缓存
+
+### 候选人账号
+
+- 候选人账号通过 `POST /api/v1/auth/register` 写入 PostgreSQL 的 `candidate_accounts` 表
+- 生产环境不再依赖静态 `candidates.json`
+- 数据库迁移必须先执行到最新版本，否则注册和候选人登录都会失败
 
 ## 11.14 健康检查与自恢复
 
@@ -296,3 +302,15 @@ cat backup.dump | docker compose \
 - 当前 `proxy` 直接代理到 `frontend`，浏览器流量统一从 Next.js 进入，再由 route handler 访问后端
 - 如果后续要把后端 API 直接暴露给第三方客户端，建议再单独补充 API 域名、限流和更细的反向代理规则
 - 由于当前环境没有 Docker CLI，本仓库内仅完成了静态配置落地，未在本机执行容器级联调
+
+## 11.17 服务器上线检查清单
+
+上线前至少完成以下检查：
+
+- 域名已解析到服务器公网 IP，且 `80/443` 已放通
+- `prod.env`、`env/*.env`、`secrets/*` 都已替换为真实值
+- 管理员和标注员密码不再是默认值
+- PostgreSQL 备份 profile 已启用，或者已有外部备份方案
+- 先用 1 个测试候选人账号完整跑通“登录 -> 自动创建 session -> 完成面试 -> 管理端查看报告”
+- 如果会使用音频输入，确认 `api_tmp` 卷已正常挂载并观察磁盘占用
+- 如果要新增候选人，在部署后的系统里通过 `POST /api/v1/auth/register` 创建账号

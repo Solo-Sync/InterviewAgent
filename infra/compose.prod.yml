@@ -43,6 +43,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - api_tmp:/app/tmp
     networks:
       - app_net
     healthcheck:
@@ -141,6 +143,7 @@ secrets:
 volumes:
   postgres_data:
   postgres_backups:
+  api_tmp:
   caddy_data:
   caddy_config:
 
