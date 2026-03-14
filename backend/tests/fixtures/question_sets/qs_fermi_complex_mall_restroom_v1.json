@@ -1,0 +1,12 @@
+{
+  "question_set_id": "qs_fermi_complex_mall_restroom_v1",
+  "title": "Complex Fermi - Mall Restroom Water",
+  "description": "Single-question Fermi set about weekend mall restroom water usage.",
+  "questions": [
+    {
+      "qid": "q1",
+      "question_id": "q1",
+      "text": "估算一个大型购物中心在周末客流高峰的一整天里，卫生间相关用水大约是多少吨。"
+    }
+  ]
+}

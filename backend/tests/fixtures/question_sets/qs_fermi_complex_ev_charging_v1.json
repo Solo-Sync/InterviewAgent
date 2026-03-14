@@ -1,0 +1,12 @@
+{
+  "question_set_id": "qs_fermi_complex_ev_charging_v1",
+  "title": "Complex Fermi - EV Charging Demand",
+  "description": "Single-question Fermi set about holiday highway charging demand.",
+  "questions": [
+    {
+      "qid": "q1",
+      "question_id": "q1",
+      "text": "估算一条热门高速公路在春节返程高峰的一天内，沿线服务区总共需要完成多少次新能源汽车充电，才不会出现长时间排队失控。"
+    }
+  ]
+}

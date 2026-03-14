@@ -1,0 +1,12 @@
+{
+  "question_set_id": "qs_fermi_complex_library_seats_v1",
+  "title": "Complex Fermi - Library Seats",
+  "description": "Single-question Fermi set about exam-season library seat demand.",
+  "questions": [
+    {
+      "qid": "q1",
+      "question_id": "q1",
+      "text": "估算一所大型综合性大学在期末考试周时，图书馆每天至少需要提供多少个有效自习座位，才能让大多数想来学习的学生在高峰时段找到位置。"
+    }
+  ]
+}

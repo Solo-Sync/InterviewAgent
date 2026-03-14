@@ -1,0 +1,12 @@
+{
+  "question_set_id": "qs_fermi_complex_short_video_v1",
+  "title": "Complex Fermi - Short Video Upload",
+  "description": "Single-question Fermi set about short-video upload volume in peak hour.",
+  "questions": [
+    {
+      "qid": "q1",
+      "question_id": "q1",
+      "text": "估算一个全国性短视频平台在晚上 8 点到 9 点这一小时内，新增上传的视频总时长大约是多少。"
+    }
+  ]
+}

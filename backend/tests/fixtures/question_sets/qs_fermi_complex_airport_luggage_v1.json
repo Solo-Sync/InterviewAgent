@@ -1,0 +1,12 @@
+{
+  "question_set_id": "qs_fermi_complex_airport_luggage_v1",
+  "title": "Complex Fermi - Airport Luggage",
+  "description": "Single-question Fermi set about peak-day airport checked baggage volume.",
+  "questions": [
+    {
+      "qid": "q1",
+      "question_id": "q1",
+      "text": "估算一个省会城市的主要机场在国庆假期最繁忙的一天，需要处理多少件托运行李。"
+    }
+  ]
+}
