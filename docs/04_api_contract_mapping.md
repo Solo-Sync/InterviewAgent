@@ -33,8 +33,8 @@
 认证方式：
 
 - `candidate`
-  - 使用 `email + invite_token`
-  - 数据源是 `CANDIDATE_REGISTRY_PATH`
+  - 先调用 `POST /api/v1/auth/register` 在 PostgreSQL 中注册
+  - 登录时使用 `username + password`
 - `admin`
   - 使用 `ADMIN_LOGIN_EMAIL / PASSWORD`
 - `annotator`

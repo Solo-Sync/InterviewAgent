@@ -1,5 +1,5 @@
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -12,8 +12,8 @@ from libs.schemas.base import (
     DimScores,
     EvaluationResult,
     EvidenceSpan,
-    PreprocessResult,
     NextAction,
+    PreprocessResult,
     Report,
     SafetyAction,
     SafetyCategory,
@@ -39,12 +39,26 @@ class SessionCreateRequest(BaseModel):
     thresholds: Thresholds | None = None
 
 
+class AuthTokenRequest(BaseModel):
+    role: Literal["candidate", "admin", "annotator"]
+    username: str | None = None
+    email: str | None = None
+    password: str
+    candidate_id: str | None = None
+    display_name: str | None = None
+
+
+class CandidateRegisterRequest(BaseModel):
+    username: str
+    password: str
+
+
 class TurnCreateRequest(BaseModel):
     input: TurnInput
     client_meta: ClientMeta | None = None
 
 
-class SessionEndReason(str, Enum):
+class SessionEndReason(StrEnum):
     COMPLETED = "completed"
     ABORTED = "aborted"
     TIMEOUT = "timeout"
@@ -63,7 +77,7 @@ class TaskRef(BaseModel):
     qid: str | None = None
 
 
-class ScaffoldErrorType(str, Enum):
+class ScaffoldErrorType(StrEnum):
     STUCK = "STUCK"
     OFFTRACK = "OFFTRACK"
     LOOP = "LOOP"
@@ -170,6 +184,15 @@ class AnnotationCreateData(BaseModel):
     stored: bool
 
 
+class AuthTokenData(BaseModel):
+    access_token: str
+    token_type: str
+    expires_in: int
+    role: Literal["candidate", "admin", "annotator"]
+    candidate_id: str | None = None
+    display_name: str | None = None
+
+
 class QuestionSetSummary(BaseModel):
     question_set_id: str
     title: str
@@ -272,6 +295,10 @@ class _ApiResponseSuccessBase(BaseModel):
 
 class ApiResponseHealth(_ApiResponseSuccessBase):
     data: HealthData
+
+
+class ApiResponseAuthToken(_ApiResponseSuccessBase):
+    data: AuthTokenData
 
 
 class ApiResponseSessionCreate(_ApiResponseSuccessBase):

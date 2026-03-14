@@ -2,7 +2,7 @@ import type { UserRole } from "@/lib/types"
 
 export type AuthenticatedUser = {
   role: Exclude<UserRole, null>
-  email: string
+  identifier: string
   candidateId: string | null
   displayName: string | null
 }
@@ -11,18 +11,39 @@ type LoginResponse = {
   user: AuthenticatedUser
 }
 
-export async function signIn(role: "admin" | "candidate", email: string, password: string) {
+type SignInInput =
+  | { role: "admin"; email: string; password: string }
+  | { role: "candidate"; username: string; password: string }
+
+export async function signIn(input: SignInInput) {
   const response = await fetch("/api/auth/login", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ role, email, password }),
+    body: JSON.stringify(input),
   })
 
   const payload = (await response.json().catch(() => null)) as { error?: string; user?: AuthenticatedUser } | null
   if (!response.ok || !payload?.user) {
     throw new Error(payload?.error ?? `Login failed: ${response.status}`)
+  }
+
+  return (payload as LoginResponse).user
+}
+
+export async function registerCandidate(username: string, password: string) {
+  const response = await fetch("/api/auth/register", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ username, password }),
+  })
+
+  const payload = (await response.json().catch(() => null)) as { error?: string; user?: AuthenticatedUser } | null
+  if (!response.ok || !payload?.user) {
+    throw new Error(payload?.error ?? `Registration failed: ${response.status}`)
   }
 
   return (payload as LoginResponse).user

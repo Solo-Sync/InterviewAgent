@@ -2,7 +2,7 @@ export type UserRole = "admin" | "candidate" | "annotator" | null
 
 export interface AuthSession {
   role: Exclude<UserRole, null>
-  email: string
+  identifier: string
   candidateId: string | null
   displayName: string | null
 }

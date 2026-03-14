@@ -1,19 +1,45 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Any, Iterator
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import JSON, TIMESTAMP, Column, Index, Integer, MetaData, String, Table, Text, UniqueConstraint
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import (
+    JSON,
+    TIMESTAMP,
+    Boolean,
+    CheckConstraint,
+    Column,
+    Index,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    func,
+    select,
+)
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from libs.schemas.base import NextAction, Report, Session as SessionModel, Turn
-
+from libs.schemas.base import NextAction, Report, Turn
+from libs.schemas.base import Session as SessionModel
 
 metadata = MetaData()
 _UNSET = object()
+
+
+@dataclass(frozen=True)
+class CandidateAccountRecord:
+    username: str
+    password_hash: str
+    display_name: str | None
+    is_active: bool
+    created_at: datetime
 
 sessions_table = Table(
     "sessions",
@@ -79,6 +105,20 @@ annotations_table = Table(
     Column("created_at", TIMESTAMP(timezone=True), nullable=False),
 )
 
+candidate_accounts_table = Table(
+    "candidate_accounts",
+    metadata,
+    Column("username", String(20), primary_key=True),
+    Column("password_hash", String(255), nullable=False),
+    Column("display_name", String(50), nullable=True),
+    Column("is_active", Boolean, nullable=False),
+    Column("created_at", TIMESTAMP(timezone=True), nullable=False),
+    CheckConstraint(
+        "username ~ '^[A-Za-z0-9]{1,20}$'",
+        name="ck_candidate_accounts_username_format",
+    ),
+)
+
 Index("idx_turns_session_created_at", turns_table.c.session_id, turns_table.c.created_at)
 Index("idx_events_session_created_at", events_table.c.session_id, events_table.c.created_at)
 
@@ -138,7 +178,11 @@ class SqlStore:
         return [session for row in rows if (session := self._row_to_session(row)) is not None]
 
     def get_session_for_update(self, db: Session, session_id: str) -> SessionModel | None:
-        query = select(sessions_table).where(sessions_table.c.session_id == session_id).with_for_update()
+        query = (
+            select(sessions_table)
+            .where(sessions_table.c.session_id == session_id)
+            .with_for_update()
+        )
         row = db.execute(query).mappings().first()
         return self._row_to_session(row)
 
@@ -162,13 +206,19 @@ class SqlStore:
             values["theta"] = theta
         if ended_at is not None:
             values["ended_at"] = ended_at
-        db.execute(sessions_table.update().where(sessions_table.c.session_id == session_id).values(**values))
+        db.execute(
+            sessions_table.update()
+            .where(sessions_table.c.session_id == session_id)
+            .values(**values)
+        )
 
     def get_last_next_action(self, session_id: str) -> NextAction | None:
         with Session(self.engine) as db:
             row = (
                 db.execute(
-                    select(sessions_table.c.last_next_action).where(sessions_table.c.session_id == session_id)
+                    select(sessions_table.c.last_next_action).where(
+                        sessions_table.c.session_id == session_id
+                    )
                 )
                 .mappings()
                 .first()
@@ -185,7 +235,12 @@ class SqlStore:
             return 0
         return int(latest) + 1
 
-    def get_turn_by_idempotency(self, db: Session, session_id: str, idempotency_key: str) -> Turn | None:
+    def get_turn_by_idempotency(
+        self,
+        db: Session,
+        session_id: str,
+        idempotency_key: str,
+    ) -> Turn | None:
         row = (
             db.execute(
                 select(turns_table.c.turn_payload).where(
@@ -204,7 +259,13 @@ class SqlStore:
         with Session(self.engine) as db:
             return self.get_turn_by_idempotency(db, session_id, idempotency_key)
 
-    def insert_turn(self, db: Session, session_id: str, turn: Turn, idempotency_key: str | None = None) -> None:
+    def insert_turn(
+        self,
+        db: Session,
+        session_id: str,
+        turn: Turn,
+        idempotency_key: str | None = None,
+    ) -> None:
         db.execute(
             turns_table.insert().values(
                 turn_id=turn.turn_id,
@@ -259,7 +320,9 @@ class SqlStore:
     def count_turns(self, session_id: str) -> int:
         with Session(self.engine) as db:
             count = db.execute(
-                select(func.count()).select_from(turns_table).where(turns_table.c.session_id == session_id)
+                select(func.count())
+                .select_from(turns_table)
+                .where(turns_table.c.session_id == session_id)
             ).scalar_one()
         return int(count)
 
@@ -331,9 +394,13 @@ class SqlStore:
             return self.list_events_tx(db, session_id)
 
     def upsert_report(self, db: Session, session_id: str, report: Report) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         exists = (
-            db.execute(select(reports_table.c.session_id).where(reports_table.c.session_id == session_id))
+            db.execute(
+                select(reports_table.c.session_id).where(
+                    reports_table.c.session_id == session_id
+                )
+            )
             .mappings()
             .first()
         )
@@ -356,7 +423,9 @@ class SqlStore:
         with Session(self.engine) as db:
             row = (
                 db.execute(
-                    select(reports_table.c.report_payload).where(reports_table.c.session_id == session_id)
+                    select(reports_table.c.report_payload).where(
+                        reports_table.c.session_id == session_id
+                    )
                 )
                 .mappings()
                 .first()
@@ -382,9 +451,52 @@ class SqlStore:
                 human_scores=human_scores,
                 notes=notes,
                 evidence=evidence,
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             )
         )
+
+    def create_candidate_account(
+        self,
+        db: Session,
+        *,
+        username: str,
+        password_hash: str,
+        display_name: str | None,
+        is_active: bool,
+    ) -> CandidateAccountRecord:
+        created_at = datetime.now(UTC)
+        db.execute(
+            candidate_accounts_table.insert().values(
+                username=username,
+                password_hash=password_hash,
+                display_name=display_name,
+                is_active=is_active,
+                created_at=created_at,
+            )
+        )
+        return CandidateAccountRecord(
+            username=username,
+            password_hash=password_hash,
+            display_name=display_name,
+            is_active=is_active,
+            created_at=created_at,
+        )
+
+    def get_candidate_account(self, username: str) -> CandidateAccountRecord | None:
+        with Session(self.engine) as db:
+            return self.get_candidate_account_tx(db, username)
+
+    def get_candidate_account_tx(self, db: Session, username: str) -> CandidateAccountRecord | None:
+        row = (
+            db.execute(
+                select(candidate_accounts_table).where(
+                    candidate_accounts_table.c.username == username
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return self._row_to_candidate_account(row)
 
     def _row_to_session(self, row: dict[str, Any] | None) -> SessionModel | None:
         if row is None:
@@ -404,9 +516,23 @@ class SqlStore:
         }
         return SessionModel.model_validate(payload)
 
+    def _row_to_candidate_account(
+        self,
+        row: dict[str, Any] | None,
+    ) -> CandidateAccountRecord | None:
+        if row is None:
+            return None
+        return CandidateAccountRecord(
+            username=row["username"],
+            password_hash=row["password_hash"],
+            display_name=row["display_name"],
+            is_active=bool(row["is_active"]),
+            created_at=row["created_at"],
+        )
+
     def _iso(self, dt: datetime | str) -> str:
         if isinstance(dt, str):
             return dt
         if dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc).isoformat()
+            return dt.replace(tzinfo=UTC).isoformat()
         return dt.isoformat()

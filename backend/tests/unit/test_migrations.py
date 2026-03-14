@@ -6,7 +6,7 @@ from libs.storage.migrations import upgrade_database
 from libs.storage.postgres import SqlStore
 from tests.support.postgres import drop_schema, schema_database_url, unique_schema
 
-EXPECTED_TABLES = {"sessions", "turns", "events", "reports", "annotations"}
+EXPECTED_TABLES = {"sessions", "turns", "events", "reports", "annotations", "candidate_accounts"}
 
 
 def test_sql_store_does_not_create_schema_implicitly() -> None:

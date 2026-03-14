@@ -6,23 +6,48 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { signIn } from "@/lib/auth-client"
+import { registerCandidate, signIn } from "@/lib/auth-client"
 import type { AuthSession } from "@/lib/types"
 
 interface LoginScreenProps {
   onLogin: (session: AuthSession) => void
 }
 
+const USERNAME_RE = /^[A-Za-z0-9]{1,20}$/
+const PASSWORD_RE = /^[A-Za-z0-9@_]{8,20}$/
+
+function validateCandidateCredentials(username: string, password: string): string | null {
+  if (!USERNAME_RE.test(username)) {
+    return "用户名需为 1-20 位英文字母或数字"
+  }
+  if (!PASSWORD_RE.test(password)) {
+    return "密码需为 8-20 位，且只能包含英文字母、数字、@、_"
+  }
+  const hasLetter = /[A-Za-z]/.test(password)
+  const hasDigit = /\d/.test(password)
+  const hasSpecial = /[@_]/.test(password)
+  if (!(hasLetter && hasDigit && hasSpecial)) {
+    return "密码必须同时包含英文字母、数字和特殊符号 @ 或 _"
+  }
+  return null
+}
+
 export function LoginScreen({ onLogin }: LoginScreenProps) {
   const [selectedRole, setSelectedRole] = useState<"admin" | "candidate">("candidate")
-  const [email, setEmail] = useState("sarah.chen@email.com")
-  const [password, setPassword] = useState("password123")
+  const [candidateMode, setCandidateMode] = useState<"login" | "register">("register")
+  const [adminEmail, setAdminEmail] = useState("admin@company.com")
+  const [adminPassword, setAdminPassword] = useState("password123")
+  const [candidateUsername, setCandidateUsername] = useState("")
+  const [candidatePassword, setCandidatePassword] = useState("")
   const [errorText, setErrorText] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   useEffect(() => {
-    setEmail(selectedRole === "admin" ? "admin@company.com" : "sarah.chen@email.com")
-    setPassword(selectedRole === "admin" ? "password123" : "invite-sarah-001")
+    if (selectedRole === "admin") {
+      setCandidateMode("login")
+      setAdminEmail("admin@company.com")
+      setAdminPassword("password123")
+    }
     setErrorText(null)
   }, [selectedRole])
 
@@ -68,13 +93,58 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
               </button>
             </div>
 
+            {selectedRole === "candidate" ? (
+              <div className="mb-6 flex rounded-lg border border-border bg-muted p-1">
+                <button
+                  onClick={() => setCandidateMode("login")}
+                  className={`flex flex-1 items-center justify-center rounded-md px-3 py-2 text-sm font-medium transition-all ${
+                    candidateMode === "login"
+                      ? "bg-card text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Sign In
+                </button>
+                <button
+                  onClick={() => setCandidateMode("register")}
+                  className={`flex flex-1 items-center justify-center rounded-md px-3 py-2 text-sm font-medium transition-all ${
+                    candidateMode === "register"
+                      ? "bg-card text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Register
+                </button>
+              </div>
+            ) : null}
+
             <form
               onSubmit={async (e) => {
                 e.preventDefault()
                 setIsSubmitting(true)
                 setErrorText(null)
                 try {
-                  const session = await signIn(selectedRole, email, password)
+                  let session: AuthSession
+                  if (selectedRole === "admin") {
+                    session = await signIn({
+                      role: "admin",
+                      email: adminEmail,
+                      password: adminPassword,
+                    })
+                  } else {
+                    const validationError = validateCandidateCredentials(candidateUsername, candidatePassword)
+                    if (validationError) {
+                      throw new Error(validationError)
+                    }
+                    session =
+                      candidateMode === "register"
+                        ? await registerCandidate(candidateUsername, candidatePassword)
+                        : await signIn({
+                            role: "candidate",
+                            username: candidateUsername,
+                            password: candidatePassword,
+                          })
+                  }
                   onLogin(session)
                 } catch (error) {
                   setErrorText(error instanceof Error ? error.message : "Login failed")
@@ -85,26 +155,40 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
               className="flex flex-col gap-4"
             >
               <div className="flex flex-col gap-2">
-                <Label htmlFor="email" className="text-foreground">Email</Label>
+                <Label htmlFor="identifier" className="text-foreground">
+                  {selectedRole === "admin" ? "Email" : "Username"}
+                </Label>
                 <Input
-                  id="email"
-                  type="email"
-                  placeholder={selectedRole === "admin" ? "admin@company.com" : "candidate@email.com"}
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
+                  id="identifier"
+                  type={selectedRole === "admin" ? "email" : "text"}
+                  placeholder={selectedRole === "admin" ? "admin@company.com" : "Only letters and digits, max 20"}
+                  value={selectedRole === "admin" ? adminEmail : candidateUsername}
+                  onChange={(event) =>
+                    selectedRole === "admin"
+                      ? setAdminEmail(event.target.value)
+                      : setCandidateUsername(event.target.value)
+                  }
                   className="bg-card"
                 />
               </div>
               <div className="flex flex-col gap-2">
                 <Label htmlFor="password" className="text-foreground">
-                  {selectedRole === "admin" ? "Password" : "Invite Token"}
+                  Password
                 </Label>
                 <Input
                   id="password"
                   type="password"
-                  placeholder={selectedRole === "admin" ? "Enter your password" : "Enter your invite token"}
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder={
+                    selectedRole === "admin"
+                      ? "Enter your password"
+                      : "8-20 chars with letters, digits, @ or _"
+                  }
+                  value={selectedRole === "admin" ? adminPassword : candidatePassword}
+                  onChange={(event) =>
+                    selectedRole === "admin"
+                      ? setAdminPassword(event.target.value)
+                      : setCandidatePassword(event.target.value)
+                  }
                   className="bg-card"
                 />
               </div>
@@ -114,14 +198,20 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                 </div>
               ) : null}
               <p className="text-xs text-muted-foreground">
-                Candidate login uses email + invite token from the backend registry. Admin login uses backend credentials.
+                {selectedRole === "admin"
+                  ? "Admin login still uses backend configured credentials."
+                  : "用户名仅支持英文字母和数字；密码需同时包含英文字母、数字和 @ 或 _。"}
               </p>
               <Button
                 type="submit"
                 disabled={isSubmitting}
                 className="mt-2 w-full bg-primary text-primary-foreground hover:bg-primary/90"
               >
-                {selectedRole === "admin" ? "Sign in as Admin" : "Start Interview"}
+                {selectedRole === "admin"
+                  ? "Sign in as Admin"
+                  : candidateMode === "register"
+                    ? "Register and Start"
+                    : "Start Interview"}
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </form>

@@ -7,7 +7,6 @@ from libs.env_loader import load_project_env
 load_project_env()
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_CANDIDATE_REGISTRY = BACKEND_ROOT / "data" / "candidates" / "dev_candidates.json"
 DEFAULT_DATABASE_URL = "postgresql+psycopg://postgres:postgres@127.0.0.1:5432/interview"
 
 
@@ -25,7 +24,6 @@ class Settings:
     admin_login_password: str
     annotator_login_email: str
     annotator_login_password: str
-    candidate_registry_path: str
     scaffold_policy_ids: tuple[str, ...]
     allow_remote_audio_fetch: bool
     remote_audio_max_bytes: int
@@ -77,23 +75,32 @@ def _validate_database_url(database_url: str) -> str:
 
 def _validate_settings(settings: Settings) -> Settings:
     database_url = _validate_database_url(settings.database_url)
-    if not settings.candidate_registry_path.strip():
-        raise ValueError("CANDIDATE_REGISTRY_PATH must not be empty")
-    candidate_registry = Path(settings.candidate_registry_path)
-    if not candidate_registry.is_absolute():
-        candidate_registry = (BACKEND_ROOT / candidate_registry).resolve()
-    if not candidate_registry.is_file():
-        raise ValueError(f"CANDIDATE_REGISTRY_PATH does not exist: {candidate_registry}")
     if not settings.scaffold_policy_ids:
         raise ValueError("SCAFFOLD_POLICY_IDS must contain at least one policy id")
 
     if settings.app_env != "dev":
-        if not settings.auth_token_secret.strip() or settings.auth_token_secret == "dev-auth-secret":
-            raise ValueError("AUTH_TOKEN_SECRET must be set to a non-dev value when APP_ENV is not dev")
-        if not settings.admin_login_password.strip() or settings.admin_login_password == "password123":
-            raise ValueError("ADMIN_LOGIN_PASSWORD must be set to a non-default value when APP_ENV is not dev")
-        if not settings.annotator_login_password.strip() or settings.annotator_login_password == "password123":
-            raise ValueError("ANNOTATOR_LOGIN_PASSWORD must be set to a non-default value when APP_ENV is not dev")
+        if (
+            not settings.auth_token_secret.strip()
+            or settings.auth_token_secret == "dev-auth-secret"
+        ):
+            raise ValueError(
+                "AUTH_TOKEN_SECRET must be set to a non-dev value when APP_ENV is not dev"
+            )
+        if (
+            not settings.admin_login_password.strip()
+            or settings.admin_login_password == "password123"
+        ):
+            raise ValueError(
+                "ADMIN_LOGIN_PASSWORD must be set to a non-default value when APP_ENV is not dev"
+            )
+        if (
+            not settings.annotator_login_password.strip()
+            or settings.annotator_login_password == "password123"
+        ):
+            raise ValueError(
+                "ANNOTATOR_LOGIN_PASSWORD must be set to a non-default value "
+                "when APP_ENV is not dev"
+            )
 
     return Settings(
         app_env=settings.app_env,
@@ -108,7 +115,6 @@ def _validate_settings(settings: Settings) -> Settings:
         admin_login_password=settings.admin_login_password,
         annotator_login_email=settings.annotator_login_email,
         annotator_login_password=settings.annotator_login_password,
-        candidate_registry_path=settings.candidate_registry_path,
         scaffold_policy_ids=settings.scaffold_policy_ids,
         allow_remote_audio_fetch=settings.allow_remote_audio_fetch,
         remote_audio_max_bytes=settings.remote_audio_max_bytes,
@@ -131,10 +137,12 @@ def _load_settings() -> Settings:
             admin_login_password=os.getenv("ADMIN_LOGIN_PASSWORD", "password123"),
             annotator_login_email=os.getenv("ANNOTATOR_LOGIN_EMAIL", "annotator@company.com"),
             annotator_login_password=os.getenv("ANNOTATOR_LOGIN_PASSWORD", "password123"),
-            candidate_registry_path=os.getenv("CANDIDATE_REGISTRY_PATH", str(DEFAULT_CANDIDATE_REGISTRY)),
             scaffold_policy_ids=_as_csv(os.getenv("SCAFFOLD_POLICY_IDS", "scaffold_v1")),
             allow_remote_audio_fetch=_as_bool(os.getenv("ALLOW_REMOTE_AUDIO_FETCH"), default=False),
-            remote_audio_max_bytes=_as_int(os.getenv("REMOTE_AUDIO_MAX_BYTES"), default=10 * 1024 * 1024),
+            remote_audio_max_bytes=_as_int(
+                os.getenv("REMOTE_AUDIO_MAX_BYTES"),
+                default=10 * 1024 * 1024,
+            ),
             remote_audio_allowed_hosts=_as_csv(os.getenv("REMOTE_AUDIO_ALLOWED_HOSTS")),
         )
     )

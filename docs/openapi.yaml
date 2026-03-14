@@ -8,6 +8,7 @@ servers:
   - url: /api/v1
 
 tags:
+  - name: auth
   - name: system
   - name: sessions
   - name: asr
@@ -22,6 +23,54 @@ security:
   - BearerAuth: []
 
 paths:
+  /auth/token:
+    post:
+      tags: [auth]
+      security: []
+      summary: Issue an access token for candidate/admin/annotator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthTokenRequest"
+      responses:
+        "200":
+          description: Access token issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseAuthToken"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/BadRequest"
+
+  /auth/register:
+    post:
+      tags: [auth]
+      security: []
+      summary: Register a candidate account and issue an access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CandidateRegisterRequest"
+      responses:
+        "201":
+          description: Candidate registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiResponseAuthToken"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
   /health:
     get:
       tags: [system]
@@ -494,6 +543,74 @@ components:
               type: boolean
             asr_ready:
               type: boolean
+        error:
+          nullable: true
+        trace_id:
+          type: string
+
+    AuthTokenRequest:
+      type: object
+      required: [role, password]
+      properties:
+        role:
+          type: string
+          enum: [candidate, admin, annotator]
+        username:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        password:
+          type: string
+        candidate_id:
+          type: string
+          nullable: true
+        display_name:
+          type: string
+          nullable: true
+
+    CandidateRegisterRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          description: 1-20 alphanumeric characters
+        password:
+          type: string
+          description: 8-20 chars, must include letters, digits, and @ or _
+
+    AuthTokenData:
+      type: object
+      required: [access_token, token_type, expires_in, role]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: bearer
+        expires_in:
+          type: integer
+        role:
+          type: string
+          enum: [candidate, admin, annotator]
+        candidate_id:
+          type: string
+          nullable: true
+        display_name:
+          type: string
+          nullable: true
+
+    ApiResponseAuthToken:
+      type: object
+      required: [ok, data, error, trace_id]
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/AuthTokenData"
         error:
           nullable: true
         trace_id:

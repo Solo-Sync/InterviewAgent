@@ -34,6 +34,6 @@ API prefix: `/api/v1`.
 
 Protected endpoints require a signed `Authorization: Bearer <token>`.
 Use `POST /api/v1/auth/token` to mint role-scoped tokens for `candidate`, `admin`, or `annotator`.
-Candidate login is validated against `CANDIDATE_REGISTRY_PATH` using `email + invite_token`.
-Set `APP_ENV`, `AUTH_TOKEN_SECRET`, `ADMIN_LOGIN_*`, `ANNOTATOR_LOGIN_*`, and `CANDIDATE_REGISTRY_PATH` in server-side env for non-demo deployments.
+Candidate accounts are self-registered in PostgreSQL via `POST /api/v1/auth/register` and then sign in with `username + password`.
+Set `APP_ENV`, `AUTH_TOKEN_SECRET`, `ADMIN_LOGIN_*`, and `ANNOTATOR_LOGIN_*` in server-side env for non-demo deployments.
 When `APP_ENV` is not `dev`, default secrets and default admin/annotator passwords will fail startup.
