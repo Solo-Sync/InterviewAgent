@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import json
+import random
 from dataclasses import dataclass
 from pathlib import Path
 
+from libs.question_sets import load_question_set_payload
 from libs.schemas.base import DimScores, EvaluationResult, NextActionType, QuestionCursor, QuestionRef
 
 
@@ -27,6 +28,7 @@ class QuestionNode:
 
 @dataclass(frozen=True)
 class QuestionSetBundle:
+    root_order: tuple[str, ...]
     order: tuple[str, ...]
     nodes: dict[str, QuestionNode]
 
@@ -43,13 +45,22 @@ class QuestionSelector:
     def __init__(self) -> None:
         self._question_set_dir = Path(__file__).resolve().parents[2] / "data" / "question_sets"
         self._cache: dict[str, QuestionSetBundle] = {}
+        self._random = random.Random()
 
     def opening_selection(self, question_set_id: str) -> QuestionSelection:
         bundle = self._load_question_set(question_set_id)
-        if not bundle.order:
+        if not bundle.root_order:
             return self._fallback_selection(turn_index=0)
-        first = bundle.nodes[bundle.order[0]]
+        first = bundle.nodes[bundle.root_order[0]]
         return self._selection_for_prompt(first.qid, first.qid, "question", first.text, [], NextActionType.ASK)
+
+    def random_opening_selection(self, question_set_id: str) -> QuestionSelection:
+        bundle = self._load_question_set(question_set_id)
+        if not bundle.root_order:
+            return self._fallback_selection(turn_index=0)
+        selected_qid = self._random.choice(bundle.root_order)
+        node = bundle.nodes[selected_qid]
+        return self._selection_for_prompt(node.qid, node.qid, "question", node.text, [], NextActionType.ASK)
 
     def select_next(
         self,
@@ -59,7 +70,7 @@ class QuestionSelector:
         theta: DimScores | None,
     ) -> QuestionSelection:
         bundle = self._load_question_set(question_set_id)
-        if not bundle.order:
+        if not bundle.root_order:
             turn_index = len(cursor.asked_prompt_ids) if cursor else 0
             return self._fallback_selection(turn_index=turn_index)
 
@@ -67,7 +78,7 @@ class QuestionSelector:
         if current is None:
             return QuestionSelection(action_type=NextActionType.END, question=None, cursor=None, exhausted=True)
 
-        current_node = bundle.nodes.get(current.node_id or "") or bundle.nodes[bundle.order[0]]
+        current_node = bundle.nodes.get(current.node_id or "") or bundle.nodes[bundle.root_order[0]]
         asked_prompt_ids = list(current.asked_prompt_ids)
         asked_prompt_set = set(asked_prompt_ids)
         low_dimensions, good_flow = self._quality_signals(evaluation, theta)
@@ -135,6 +146,13 @@ class QuestionSelector:
             return selection.question.text
         fallback = self._fallback_selection(turn_index)
         return selection.question.text if selection.question and selection.question.text else fallback.question.text or ""
+
+    def question_text(self, question_set_id: str, node_id: str | None) -> str | None:
+        if not node_id:
+            return None
+        bundle = self._load_question_set(question_set_id)
+        node = bundle.nodes.get(node_id)
+        return node.text if node is not None else None
 
     def _fallback_selection(self, turn_index: int) -> QuestionSelection:
         if turn_index == 0:
@@ -232,22 +250,24 @@ class QuestionSelector:
         if question_set_id in self._cache:
             return self._cache[question_set_id]
 
-        path = self._question_set_dir / f"{question_set_id}.json"
-        if not path.exists():
-            bundle = QuestionSetBundle(order=(), nodes={})
+        payload = load_question_set_payload(self._question_set_dir, question_set_id)
+        if payload is None:
+            bundle = QuestionSetBundle(root_order=(), order=(), nodes={})
             self._cache[question_set_id] = bundle
             return bundle
 
-        payload = json.loads(path.read_text(encoding="utf-8"))
         questions = payload.get("questions") or []
         nodes: dict[str, QuestionNode] = {}
+        root_order: list[str] = []
         order: list[str] = []
         if isinstance(questions, list):
             for index, question in enumerate(questions):
                 if isinstance(question, dict):
-                    self._register_node(question, nodes, order, fallback_qid=f"q{index + 1}")
+                    root_qid = self._register_node(question, nodes, order, fallback_qid=f"q{index + 1}")
+                    if root_qid:
+                        root_order.append(root_qid)
 
-        bundle = QuestionSetBundle(order=tuple(order), nodes=nodes)
+        bundle = QuestionSetBundle(root_order=tuple(root_order), order=tuple(order), nodes=nodes)
         self._cache[question_set_id] = bundle
         return bundle
 

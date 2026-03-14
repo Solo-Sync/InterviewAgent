@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from apps.api.core.auth import AuthPrincipal, AuthRole, require_roles
 from apps.api.core.dependencies import get_orchestrator
 from apps.api.core.response import ok
+from libs.question_sets import load_question_set_payload
 from libs.schemas.api import (
     ApiResponseAdminSessionDetail,
     ApiResponseAdminSessionList,
@@ -51,10 +52,9 @@ def get_question_set(
     question_set_id: str,
     _: AuthPrincipal = Depends(require_roles(AuthRole.ADMIN)),
 ):
-    path = QUESTION_SET_DIR / f"{question_set_id}.json"
-    if not path.exists():
+    payload = load_question_set_payload(QUESTION_SET_DIR, question_set_id)
+    if payload is None:
         raise HTTPException(status_code=404, detail="question_set not found")
-    payload = _load_json(path)
     question_set = {
         "question_set_id": payload.get("question_set_id"),
         "title": payload.get("title") or payload.get("name") or payload.get("question_set_id"),
@@ -140,13 +140,21 @@ def get_session_detail(
     turns, _ = orchestrator.list_turns(session_id, limit=200, cursor=None)
     report = orchestrator.get_report(session_id)
     review_status, prompt_injection_count, invalid_reason = orchestrator.get_session_review_status(session_id)
+    opening_prompt = None
+    if turns and turns[0].question and turns[0].question.text:
+        opening_prompt = turns[0].question.text
+    else:
+        opening_prompt = orchestrator.get_opening_prompt(
+            session.question_set_id,
+            session.current_question_cursor.node_id if session.current_question_cursor else None,
+        )
     return ok(
         request,
         {
             "session": session.model_dump(),
             "turns": [turn.model_dump() for turn in turns],
             "report": report.model_dump() if report is not None else None,
-            "opening_prompt": orchestrator.get_opening_prompt(session.question_set_id),
+            "opening_prompt": opening_prompt,
             "review_status": review_status.value,
             "prompt_injection_count": prompt_injection_count,
             "invalid_reason": invalid_reason,

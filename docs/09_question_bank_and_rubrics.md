@@ -57,7 +57,7 @@
 
 如果完整接线，`QuestionSelector.select_next()` 可以：
 
-- opening 时返回第一题
+- opening 时在根题目中随机选一题
 - 低分维度时优先发 probe
 - `good_flow` 时发 perturbation
 - 当前节点用完后走 child
@@ -71,9 +71,9 @@
 当前在线主流程只在两个地方用到 selector：
 
 - `create_session()`
-  - 调 `opening_selection()` 取首题
+  - 调 `random_opening_selection()` 从根题目里随机抽 opening 题
 - `get_opening_prompt()`
-  - 管理端详情页展示 opening prompt
+  - 用于恢复题面文本；管理端详情页优先展示 session 实际抽到的 opening prompt
 
 在线回合后续并不会调用 `select_next()`。
 
@@ -84,7 +84,7 @@
 
 ## 9.5 Opening Prompt 的拼装
 
-首题文本不是直接把题库原文返回给前端，而是会附加引导句：
+opening 文本不是直接把题库原文返回给前端，而是会附加引导句：
 
 `不要着急作答，先说说你打算怎么做。`
 

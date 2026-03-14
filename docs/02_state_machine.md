@@ -135,7 +135,7 @@ LLM 只允许返回：
 
 `create_session()` 时：
 
-- cursor 来自 `QuestionSelector.opening_selection()`
+- cursor 来自 `QuestionSelector.random_opening_selection()`
 - opening prompt 会附加一句“不要着急作答，先说说你打算怎么做。”
 
 后续正常回合：

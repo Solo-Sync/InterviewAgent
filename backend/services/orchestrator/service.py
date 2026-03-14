@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from apps.api.core.config import settings
+from libs.question_sets import question_set_exists
 from libs.observability import log_event, observe_turn_stage, observe_turn_total
 from libs.schemas.api import CursorEnvelope, HumanAnnotationCreateRequest, SessionCreateRequest, TurnCreateRequest
 from libs.schemas.base import (
@@ -90,7 +91,7 @@ class OrchestratorService:
             req.scoring_policy_id,
             req.scaffold_policy_id,
         )
-        opening = self.selector.opening_selection(req.question_set_id)
+        opening = self.selector.random_opening_selection(req.question_set_id)
         opening_seed_text = opening.question.text if opening.question else None
         opening_text = self._build_opening_prompt(opening_seed_text)
         opening_cursor = (
@@ -689,8 +690,10 @@ class OrchestratorService:
         report = self.get_report(session_id)
         return self._derive_session_review_status(session, report=report)
 
-    def get_opening_prompt(self, question_set_id: str) -> str | None:
-        prompt = self.selector.next_prompt(question_set_id, 0)
+    def get_opening_prompt(self, question_set_id: str, node_id: str | None = None) -> str | None:
+        prompt = self.selector.question_text(question_set_id, node_id)
+        if not prompt:
+            prompt = self.selector.next_prompt(question_set_id, 0)
         prompt = self._build_opening_prompt(prompt)
         return prompt or None
 
@@ -1133,7 +1136,7 @@ class OrchestratorService:
         question = (seed_text or "").strip()
         if not question:
             return guidance
-        return f"{question}\n{guidance}"
+        return f"{question}{guidance}"
 
     def _question_from_cursor(self, cursor: QuestionCursor | None) -> QuestionRef | None:
         if cursor is None or not cursor.prompt_text:
@@ -1209,7 +1212,7 @@ class OrchestratorService:
         rubric_id: str,
         scaffold_policy_id: str,
     ) -> None:
-        if not self._json_resource_exists(self.question_set_dir, question_set_id):
+        if not question_set_exists(self.question_set_dir, question_set_id):
             raise ValueError(f"question_set not found: {question_set_id}")
         if not self._json_resource_exists(self.rubric_dir, rubric_id):
             raise ValueError(f"rubric not found: {rubric_id}")

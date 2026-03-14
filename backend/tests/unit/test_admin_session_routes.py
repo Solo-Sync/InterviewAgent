@@ -91,6 +91,7 @@ def test_admin_session_detail_returns_transcript_and_report() -> None:
             "scaffold_policy_id": "scaffold_v1",
         },
     )
+    opening_prompt = create_resp.json()["data"]["next_action"]["text"]
     session_id = create_resp.json()["data"]["session"]["session_id"]
 
     turn_resp = client.post(
@@ -109,6 +110,6 @@ def test_admin_session_detail_returns_transcript_and_report() -> None:
     assert resp.status_code == 200
     payload = resp.json()["data"]
     assert payload["session"]["session_id"] == session_id
-    assert "估算" in payload["opening_prompt"]
+    assert payload["opening_prompt"] == opening_prompt
     assert payload["turns"][0]["input"]["text"] == "我先拆问题，再做数量级估算。"
     assert payload["report"] is not None

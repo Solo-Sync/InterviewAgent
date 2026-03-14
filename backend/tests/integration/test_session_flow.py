@@ -21,6 +21,15 @@ ANNOTATOR_HEADERS = {
     "Authorization": f"Bearer {issue_access_token(subject='annotator@company.com', role=AuthRole.ANNOTATOR)[0]}"
 }
 
+EXPECTED_FERMI_OPENINGS = {
+    "估算一个省会城市的主要机场在国庆假期最繁忙的一天，需要处理多少件托运行李。不要着急作答，先说说你打算怎么做。",
+    "估算一个常住人口约千万级的城市，在工作日晚餐高峰的一个小时内会产生多少单外卖配送订单。不要着急作答，先说说你打算怎么做。",
+    "估算一所大型综合性大学在期末考试周时，图书馆每天至少需要提供多少个有效自习座位，才能让大多数想来学习的学生在高峰时段找到位置。不要着急作答，先说说你打算怎么做。",
+    "估算一个全国性短视频平台在晚上 8 点到 9 点这一小时内，新增上传的视频总时长大约是多少。不要着急作答，先说说你打算怎么做。",
+    "估算一个大型购物中心在周末客流高峰的一整天里，卫生间相关用水大约是多少吨。不要着急作答，先说说你打算怎么做。",
+    "估算一条热门高速公路在春节返程高峰的一天内，沿线服务区总共需要完成多少次新能源汽车充电，才不会出现长时间排队失控。不要着急作答，先说说你打算怎么做。",
+}
+
 
 @pytest.fixture(autouse=True)
 def _mock_dialogue_generation(monkeypatch):
@@ -84,7 +93,7 @@ def test_session_turn_end_flow() -> None:
         },
     )
     assert create_resp.status_code == 200
-    assert "估算你所在城市" in create_resp.json()["data"]["next_action"]["text"]
+    assert create_resp.json()["data"]["next_action"]["text"] in EXPECTED_FERMI_OPENINGS
     session_id = create_resp.json()["data"]["session"]["session_id"]
 
     turn_resp = client.post(

@@ -79,7 +79,7 @@
 - `services/orchestrator/policy.py`
   当前未在 `handle_turn()` 中调用。
 - `QuestionSelector.select_next()`
-  当前在线回合不使用它推进题目树；只在 `create_session()` 里使用 `opening_selection()` 取首题。
+  当前在线回合不使用它推进题目树；`create_session()` 只会从题库根节点里随机抽一题作为 opening。
 - `ScoreAggregator`
   当前不用于主流程 turn 评分。
 - `theta`
