@@ -7,7 +7,7 @@
 - `backend/libs/schemas/base.py`
 - `backend/libs/schemas/api.py`
 
-路由层的请求体、响应体都应优先复用这些模型。
+路由层的请求体与响应体通常复用这些模型。
 
 ## 13.2 分层职责
 
@@ -20,7 +20,7 @@
 - 调 service
 - 返回统一 envelope
 
-不应在 router 里写复杂业务状态机。
+复杂业务状态机通常不放在 router 中。
 
 ### `services/*`
 
@@ -63,7 +63,7 @@
 - 查询粒度粗
 - 某些派生字段只能在应用层计算
 
-如果要把某个字段做成高频查询条件，再考虑拆成独立列。
+当某个字段需要成为高频查询条件时，再考虑拆成独立列会更合适。
 
 ## 13.4 事件优先于派生状态
 
@@ -75,42 +75,42 @@
 - `prompt_injection_count`
 - `invalid_reason`
 
-因此新增流程分支时，优先考虑：
+因此新增流程分支时，通常会先考虑：
 
 1. 应该追加什么 event
 2. 哪些派生逻辑需要同步更新
 
-## 13.5 对外返回前优先映射回 schema
+## 13.5 对外返回前映射回 schema
 
-允许 service 内部有辅助 dataclass 或临时 dict，但对外返回前应尽量转回 `libs/schemas`。
+service 内部可以存在辅助 dataclass 或临时 dict；对外返回前通常会映射回 `libs/schemas`。
 
 已有示例：
 
 - `services/asr/adapter.py`
 
-## 13.6 变更建议顺序
+## 13.6 常见变更路径
 
-### 改 API 契约
+### API 契约调整
 
-1. 先改 `libs/schemas/*`
-2. 再改 router / service
-3. 再改 `docs/openapi.yaml`
-4. 再改前端类型和请求封装
+1. 更新 `libs/schemas/*`
+2. 更新 router / service
+3. 更新 `docs/openapi.yaml`
+4. 更新前端类型和请求封装
 
-### 改主流程行为
+### 主流程行为调整
 
-1. 先改 `OrchestratorService`
-2. 同步更新事件、review status、报告影响
-3. 再更新文档与测试
+1. 调整 `OrchestratorService`
+2. 同步更新事件、review status 与报告影响
+3. 更新文档与测试
 
-### 改前端调用
+### 前端调用调整
 
-1. 先确认是否经过 `/api/v1/*` 代理
-2. 再改 `frontend/lib/api.ts`
-3. 再改组件
+1. 确认是否经过 `/api/v1/*` 代理
+2. 调整 `frontend/lib/api.ts`
+3. 调整组件
 
-## 13.7 当前开发中的一个重要习惯
+## 13.7 关于在线链路的说明
 
-不要只看类名判断是否“已经上线”。
+类名或模块名并不一定等同于在线链路已经启用。
 
-本仓库存在多处“设计上存在、代码上实现了、但在线链路尚未接通”的模块。修改前务必先从入口函数反查调用链。
+本仓库存在多处“设计上存在、代码上实现了、但在线链路尚未接通”的模块，因此理解系统行为时更适合从入口函数反查调用链。

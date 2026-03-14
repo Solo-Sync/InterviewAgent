@@ -33,7 +33,7 @@
 
 本地开发是当前默认路径。`infra/docker-compose.yml` 主要用于起 PostgreSQL；不是一套完整的本地全栈编排。
 
-## 本地开发启动
+## 本地运行
 
 ### 前置条件
 
@@ -43,7 +43,7 @@
 - `pnpm`
 - Docker 或 Docker Desktop
 
-如果你是在 Windows + WSL2 环境中开发，通常做法是：
+Windows + WSL2 环境通常采用以下方式运行：
 
 - 在 Windows 打开 Docker Desktop
 - 在 Docker Desktop 中启用当前 WSL 发行版的 integration
@@ -80,9 +80,9 @@ uv run uvicorn apps.api.main:app --reload --host 127.0.0.1 --port 8000
 
 说明：
 
-- `cp .env.example .env` 不是可选步骤，当前 README 之前漏写了
+- `cp .env.example .env` 是运行前的必要步骤
 - `DATABASE_URL` 默认就是本地 PostgreSQL：`postgresql+psycopg://postgres:postgres@127.0.0.1:5432/interview`
-- 必须先执行 `alembic upgrade head`，后端不会在运行时自动建表
+- 启动前需要先执行 `alembic upgrade head`；后端不会在运行时自动建表
 - 后端地址是 `http://127.0.0.1:8000`
 - API 前缀固定为 `/api/v1`
 
@@ -117,7 +117,7 @@ pnpm dev
 - 前端页面：`http://127.0.0.1:8080`
 - 后端健康检查：`http://127.0.0.1:8000/api/v1/health`
 
-如果前端页面打开但接口报错，优先检查：
+如果前端页面可打开但接口报错，常见原因包括：
 
 - PostgreSQL 是否真的启动
 - 后端是否已经执行过迁移
@@ -159,7 +159,7 @@ cp secrets/admin_login_password.example secrets/admin_login_password
 cp secrets/annotator_login_password.example secrets/annotator_login_password
 ```
 
-至少要修改这些内容：
+生产环境至少需要调整以下内容：
 
 - `prod.env` 里的 `SERVER_NAME`
 - `secrets/*` 中所有示例密码和密钥
@@ -196,9 +196,9 @@ docker compose \
 
 ### 4. 生产部署前提
 
-- `SERVER_NAME` 必须是已解析到服务器公网 IP 的域名
-- 服务器必须放通 `80/tcp` 和 `443/tcp`
-- 不要把真实 secrets 直接写进 `env/*.env`
+- `SERVER_NAME` 需要是已解析到服务器公网 IP 的域名
+- 服务器需要放通 `80/tcp` 和 `443/tcp`
+- 真实 secrets 不应直接写入 `env/*.env`
 
 完整细节见 [docs/11_deployment.md](./docs/11_deployment.md)。
 

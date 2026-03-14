@@ -107,12 +107,12 @@
 
 这意味着：
 
-- 如果你新增终止原因
+- 如果新增终止原因
 - 或新增 invalidation 机制
 
-必须同步修改：
+以下逻辑也需要同步更新：
 
 - `OrchestratorService._derive_session_review_status()`
 - 管理端展示逻辑
 
-否则 admin 页面状态会和真实会话结论不一致。
+否则 admin 页面状态可能与真实会话结论不一致。

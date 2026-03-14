@@ -28,7 +28,7 @@ uv run uvicorn apps.api.main:app --reload --host 127.0.0.1 --port 8000
 
 关键点：
 
-- 必须先迁移数据库
+- 启动前需要先迁移数据库
 - SQLite 会被显式拒绝
 
 ## 11.4 启动前端
@@ -55,7 +55,7 @@ pnpm dev
 - `apps/api/core/config.py`
 - `libs/storage/postgres.py`
 
-因此不要尝试用 SQLite 跑本地 demo。
+因此本项目的本地运行与部署均以 PostgreSQL 为前提。
 
 ## 11.6 关键环境变量
 
@@ -119,7 +119,7 @@ pnpm dev
 - `HttpOnly` cookie 保存 access token
 - Next.js route handler 代理到后端
 
-因此生产部署时至少要保证：
+因此生产部署至少需要满足以下条件：
 
 - 前端服务端能够访问后端 `BACKEND_ORIGIN`
 - cookie 域与路径配置正确
@@ -175,13 +175,13 @@ cp secrets/admin_login_password.example secrets/admin_login_password
 cp secrets/annotator_login_password.example secrets/annotator_login_password
 ```
 
-必须修改：
+生产环境中需要修改：
 
 - `prod.env` 中的 `SERVER_NAME`
 - `secrets/*` 中的所有示例值
 - `env/backend.prod.env` 中与 LLM / ASR / 远程音频相关的生产配置
 
-推荐额外修改：
+通常还会一并调整：
 
 - `env/postgres.prod.env` 中的 `POSTGRES_DB`、`POSTGRES_USER`
 - `env/backend.prod.env` 中的 `ACCESS_TOKEN_TTL_SECONDS`
@@ -225,15 +225,15 @@ docker compose --env-file infra/prod.env -f infra/compose.prod.yml logs -f proxy
 ### 反向代理与 TLS
 
 - Caddy 使用 `infra/Caddyfile`
-- `SERVER_NAME` 必须是已经解析到服务器公网 IP 的域名
-- 服务器必须允许入站 `80/tcp` 与 `443/tcp`
+- `SERVER_NAME` 需要是已经解析到服务器公网 IP 的域名
+- 服务器需要允许入站 `80/tcp` 与 `443/tcp`
 - TLS 证书与状态存放在 `caddy_data` 卷中
 
 ### Secret 管理
 
 - 数据库密码、JWT 密钥、后台密码通过 Docker secrets 文件注入
 - 后端容器入口脚本会优先读取 `*_FILE` 环境变量，再导出为运行时环境变量
-- 不要把真实 secret 写进 `env/*.env`
+- 真实 secret 不应写入 `env/*.env`
 
 ### 数据持久化
 
@@ -249,7 +249,7 @@ docker compose --env-file infra/prod.env -f infra/compose.prod.yml logs -f proxy
 
 - 候选人账号通过 `POST /api/v1/auth/register` 写入 PostgreSQL 的 `candidate_accounts` 表
 - 生产环境不再依赖静态 `candidates.json`
-- 数据库迁移必须先执行到最新版本，否则注册和候选人登录都会失败
+- 数据库迁移需要先执行到最新版本，否则注册和候选人登录会失败
 
 ## 11.14 健康检查与自恢复
 

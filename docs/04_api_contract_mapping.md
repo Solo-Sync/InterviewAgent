@@ -147,4 +147,4 @@
 - `frontend/app/api/v1/[...path]/route.ts`
   把 cookie 中的 access token 转成 `Authorization: Bearer ...`
 
-所以当你修改后端接口权限或 header 语义时，必须同时检查前端 route handler。
+因此，后端接口权限或 header 语义一旦变化，前端 route handler 也需要同步调整。

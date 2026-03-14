@@ -39,7 +39,7 @@ InterviewAgent/
   infra/
 ```
 
-## 12.2 高优先级入口文件
+## 12.2 关键入口文件
 
 ### 会话主流程
 
@@ -74,41 +74,41 @@ InterviewAgent/
 - `backend/.env.example`
 - `frontend/.env.example`
 
-## 12.4 当你要改这些功能时，从哪里开始看
+## 12.4 相关功能对应的主要入口
 
-### 改 turn 流程
+### turn 流程
 
-先看：
+核心入口：
 
 - `backend/services/orchestrator/service.py`
 
-再看：
+相关模块：
 
 - `backend/services/trigger/*`
 - `backend/services/safety/*`
 - `backend/services/evaluation/*`
 
-### 改会话状态/结束条件
+### 会话状态与结束条件
 
-先看：
+核心入口：
 
 - `backend/services/orchestrator/state_machine.py`
 - `backend/services/orchestrator/next_action_decider.py`
 - `backend/services/orchestrator/service.py`
 
-### 改题库推进逻辑
+### 题库推进逻辑
 
-先看：
+核心入口：
 
 - `backend/services/orchestrator/selector.py`
 
-但要特别确认：
+需要额外确认：
 
-- 当前在线主流程是否真的会调用你改的分支
+- 当前在线主流程是否真实调用对应分支
 
-### 改前端 API 代理
+### 前端 API 代理
 
-先看：
+核心入口：
 
 - `frontend/app/api/v1/[...path]/route.ts`
 - `frontend/lib/server-auth.ts`
@@ -116,11 +116,11 @@ InterviewAgent/
 
 ## 12.5 当前“代码存在但默认不生效”的区域
 
-这些地方最容易让接手的人误判：
+这些位置最容易造成对在线行为的误判：
 
 - `backend/services/orchestrator/policy.py`
 - `backend/services/orchestrator/selector.py` 的 `select_next()`
 - `backend/services/evaluation/aggregator.py` 在在线主流程中的使用
 - `Session.theta` 在线更新
 
-动这些文件之前，先确认调用链是否真的经过它们。
+分析这些文件时，建议先确认调用链是否真的经过它们。
